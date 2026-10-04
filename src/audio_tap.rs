@@ -70,6 +70,9 @@ struct BeatDetector {
     average: f32,
     last_beat: Option<Instant>,
     strength: f32,
+    /// Every beat heard since playback began, so a reader polling between beats
+    /// can tell that one landed even if its pulse has already faded.
+    count: u64,
     /// Recent gaps between beats, in seconds, oldest first.
     intervals: VecDeque<f32>,
 }
@@ -178,29 +181,70 @@ impl AudioTap {
             .is_some_and(|last| last.elapsed() < STALE_AFTER)
     }
 
+    /// How many beats have been heard so far. Counting up rather than flagging, so
+    /// a reader that looks less often than beats land still sees every one.
+    pub fn beats(&self) -> u64 {
+        self.beat.lock().unwrap().count
+    }
+
+    /// The shape of the last few milliseconds of sound, in `count` points from -1
+    /// to 1, oldest first, or None when there is no recent audio.
+    ///
+    /// Each point is the loudest sample in its stretch of the window, sign kept,
+    /// so thinning the window out does not flatten the peaks an oscilloscope
+    /// is drawn to show.
+    pub fn waveform(&self, count: usize) -> Option<Vec<f32>> {
+        if count == 0 {
+            return None;
+        }
+        let samples = self.recent()?;
+        let stretch = samples.len().div_ceil(count).max(1);
+        Some(
+            samples
+                .chunks(stretch)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .copied()
+                        .fold(0.0f32, |peak, sample| {
+                            if sample.abs() > peak.abs() {
+                                sample
+                            } else {
+                                peak
+                            }
+                        })
+                        .clamp(-1.0, 1.0)
+                })
+                .collect(),
+        )
+    }
+
+    /// The window read out oldest first, so it is one continuous stretch of
+    /// audio, or None when there is nothing recent enough to analyse.
+    fn recent(&self) -> Option<Vec<f32>> {
+        if !self.is_live() {
+            return None;
+        }
+        let window = self.samples.lock().unwrap();
+        if !window.filled {
+            return None;
+        }
+        let mut ordered = Vec::with_capacity(WINDOW);
+        ordered.extend_from_slice(&window.samples[window.next..]);
+        ordered.extend_from_slice(&window.samples[..window.next]);
+        Some(ordered)
+    }
+
     /// The current spectrum in `count` bands, each 0 to 1, or None when there is no
     /// recent audio to analyse.
     ///
     /// Bands are spaced logarithmically, the way pitch is heard, and levels are in
     /// decibels for the same reason.
     pub fn bands(&self, count: usize) -> Option<Vec<f32>> {
-        if count == 0 || !self.is_live() {
+        if count == 0 {
             return None;
         }
-
-        let samples = {
-            let window = self.samples.lock().unwrap();
-            if !window.filled {
-                return None;
-            }
-            // Read out oldest first, so the window is one continuous stretch of audio.
-            let mut ordered = Vec::with_capacity(WINDOW);
-            ordered.extend_from_slice(&window.samples[window.next..]);
-            ordered.extend_from_slice(&window.samples[..window.next]);
-            ordered
-        };
-
-        let magnitudes = spectrum(&samples);
+        let magnitudes = spectrum(&self.recent()?);
         let bin_hz = SAMPLE_RATE / WINDOW as f32;
         let mut bands = Vec::with_capacity(count);
         for band in 0..count {
@@ -266,6 +310,7 @@ impl BeatDetector {
                 }
             }
             self.last_beat = Some(now);
+            self.count += 1;
         }
 
         // The average follows the music, so loud and quiet passages both pulse.
@@ -602,5 +647,34 @@ mod tests {
         assert!(loud.level() <= 1.0);
         // Nothing has been heard at all, so there is no level to report.
         assert_eq!(AudioTap::new().level(), 0.0);
+    }
+
+    #[test]
+    fn the_waveform_keeps_the_peaks_of_what_is_playing() {
+        let tap = AudioTap::new();
+        assert_eq!(tap.waveform(64), None, "nothing heard yet");
+
+        tap.push(&tone(440.0, 0.8));
+        let points = tap.waveform(64).expect("a full window has been heard");
+        assert_eq!(points.len(), 64);
+        let peak = points
+            .iter()
+            .fold(0.0f32, |peak, point| peak.max(point.abs()));
+        assert!(peak > 0.7, "thinning flattened the peaks to {peak}");
+        assert!(points.iter().any(|point| *point < 0.0), "the sign was lost");
+        assert!(points.iter().all(|point| point.abs() <= 1.0));
+    }
+
+    #[test]
+    fn beats_are_counted_as_they_land() {
+        let mut detector = detector_fed(400, 0.01);
+        let before = detector.count;
+        // A kick well above the quiet bass the average has settled on.
+        detector.last_beat = None;
+        detector.feed(&tone(60.0, 0.9));
+        assert_eq!(detector.count, before + 1);
+        // The next packet falls inside the refractory gap, so it is the same beat.
+        detector.feed(&tone(60.0, 0.9));
+        assert_eq!(detector.count, before + 1);
     }
 }

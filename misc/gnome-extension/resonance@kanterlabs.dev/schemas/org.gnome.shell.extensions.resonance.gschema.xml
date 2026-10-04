@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.resonance" path="/org/gnome/shell/extensions/resonance/">
+    <key name="toggle-popup" type="as">
+      <default><![CDATA[['<Super>m']]]></default>
+      <summary>Open or close the Resonance popup</summary>
+    </key>
+    <key name="visualizer" type="s">
+      <choices>
+        <choice value="orbit"/>
+        <choice value="bars"/>
+        <choice value="ridges"/>
+        <choice value="scope"/>
+      </choices>
+      <default>'orbit'</default>
+      <summary>Which visualizer the popup shows</summary>
+    </key>
+  </schema>
+</schemalist>

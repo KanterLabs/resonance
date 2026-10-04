@@ -496,6 +496,31 @@ terminal as follows:
 "Hideki Naganuma"
 ```
 
+### Audio feed for visualizers
+The status above goes out at most twice a second, which is too slow to draw music
+by. A visualizer can ask its connection for a separate audio feed instead, with a
+versioned request (one line):
+
+```
+{"protocol":"resonance","version":1,"id":1,"method":"audio.subscribe","params":{"fps":60,"bands":64,"waveform":256}}
+```
+
+`fps` is 1 to 60 (default 30), `bands` is 0 to 128 (default 64) and `waveform` is 0 to
+512 points (default 0). After the response, that connection also receives a line
+like this at the requested rate while sound is playing, and one `"live":false` frame
+when it stops:
+
+```
+{"audio":{"live":true,"bands":[0.41,0.63,...],"waveform":[-0.12,0.34,...],"level":0.74,"pulse":0.3,"beats":812,"tempo":92.3}}
+```
+
+`bands` run from 40Hz to 15kHz on a log scale and `level` is overall loudness, each 0
+to 1. `waveform` is the last ~23ms of audio from -1 to 1. `pulse` jumps on a beat
+and fades over a fraction of a second; `beats` counts every beat so far, so a change
+between frames means one landed. `tempo` is in beats per minute, or null until
+enough beats have been heard. Send `audio.unsubscribe` to stop the feed. Other
+connections are unaffected. `misc/gnome-extension` uses this feed for its popup.
+
 ## Configuration
 Configuration is saved to the `config.toml` file in the platform's standard configuration directory.
 Run `resonance info` to show the location of this directory on your platform. To reload the

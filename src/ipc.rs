@@ -14,6 +14,7 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::WatchStream;
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec};
 
+use crate::audio_tap::AudioTap;
 use crate::events::{Event, EventManager, Notification};
 use crate::model::playable::Playable;
 use crate::model::track::Track;
@@ -57,6 +58,88 @@ struct AudioStatus {
     level: f32,
     pulse: f32,
     tempo: Option<f32>,
+}
+
+/// A connection's subscription to the audio feed: how often, and in how much detail.
+///
+/// The status snapshot only goes out twice a second, which is plenty for a track
+/// title and far too slow to draw music by. A frontend that wants to visualize
+/// asks for this instead, and gets audio alone at its own rate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AudioFeed {
+    fps: u64,
+    bands: usize,
+    waveform: usize,
+}
+
+impl AudioFeed {
+    /// The feed a connection is left with after an `audio.*` response: the one it
+    /// just asked for, none if it unsubscribed, or the one it had if it failed.
+    fn after(response: &serde_json::Value, current: Option<Self>) -> Option<Self> {
+        if response["ok"] != true {
+            return current;
+        }
+        let result = &response["result"];
+        if result["subscribed"] != true {
+            return None;
+        }
+        Some(Self {
+            fps: result["fps"].as_u64().filter(|fps| *fps > 0)?,
+            bands: result["bands"].as_u64()? as usize,
+            waveform: result["waveform"].as_u64()? as usize,
+        })
+    }
+
+    fn clock(self) -> tokio::time::Interval {
+        let mut clock = tokio::time::interval(Duration::from_secs(1) / self.fps as u32);
+        // A frame that comes late is stale; skip it rather than send a burst.
+        clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        clock
+    }
+}
+
+/// One frame of the audio feed, sent as its own line beside the status snapshots.
+#[derive(Debug, Serialize)]
+struct AudioFrame {
+    audio: AudioReading,
+}
+
+#[derive(Debug, Serialize)]
+struct AudioReading {
+    /// False once playback has stopped or paused; the other fields then read as
+    /// silence, and frames stop until sound comes back.
+    live: bool,
+    bands: Vec<f32>,
+    waveform: Vec<f32>,
+    level: f32,
+    pulse: f32,
+    /// Beats heard so far. A change between frames means one landed.
+    beats: u64,
+    tempo: Option<f32>,
+}
+
+impl AudioReading {
+    fn take(tap: &AudioTap, feed: AudioFeed) -> Self {
+        Self {
+            live: tap.is_live(),
+            bands: tap.bands(feed.bands).unwrap_or_default(),
+            waveform: tap.waveform(feed.waveform).unwrap_or_default(),
+            level: tap.level(),
+            pulse: tap.pulse(),
+            beats: tap.beats(),
+            tempo: tap.tempo(),
+        }
+    }
+}
+
+/// Whether a request line is about this connection's audio feed, which the
+/// connection has to act on itself rather than hand off.
+fn is_audio_request(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line).is_ok_and(|request| {
+        request["method"]
+            .as_str()
+            .is_some_and(|method| method.starts_with("audio."))
+    })
 }
 
 impl Status {
@@ -174,6 +257,7 @@ impl IpcSocket {
         queue: Arc<Queue>,
     ) {
         let rpc = Arc::new(RpcService::from_queue(queue.clone(), ev.clone()));
+        let tap = queue.get_spotify().audio_tap();
         let mut ticker = tokio::time::interval(Duration::from_millis(500));
         loop {
             tokio::select! {
@@ -182,7 +266,7 @@ impl IpcSocket {
                         debug!("Connection from {sockaddr:?}");
                         // Refresh before subscription so a newly opened frontend gets live state immediately.
                         tx.send_replace(Status::from_queue(&queue));
-                        tokio::spawn(Self::stream_handler(stream, ev.clone(), WatchStream::new(rx.clone()), rpc.clone()));
+                        tokio::spawn(Self::stream_handler(stream, ev.clone(), WatchStream::new(rx.clone()), rpc.clone(), tap.clone()));
                     }
                     Err(e) => error!("Error accepting connection: {e}"),
                 },
@@ -201,6 +285,7 @@ impl IpcSocket {
         ev: EventManager,
         mut rx: WatchStream<Status>,
         rpc: Arc<RpcService>,
+        tap: Arc<AudioTap>,
     ) -> Result<(), String> {
         let (reader, writer) = stream.split();
         let mut framed_reader =
@@ -209,13 +294,30 @@ impl IpcSocket {
         let (responses_tx, mut responses_rx) = tokio::sync::mpsc::channel::<serde_json::Value>(32);
 
         let inflight = Arc::new(tokio::sync::Semaphore::new(16));
+        let mut feed: Option<AudioFeed> = None;
+        let mut audio_clock: Option<tokio::time::Interval> = None;
+        // Whether the last frame sent had sound in it, so silence is sent once
+        // rather than at the full frame rate for as long as playback is paused.
+        let mut sent_live = true;
         loop {
             tokio::select! {
                 line = framed_reader.next() => {
                     match line {
                         Some(Ok(line)) => {
                             debug!("Received IPC request ({} bytes)", line.len());
-                            if line.trim_start().starts_with('{') || line.trim_start().starts_with('[') {
+                            if line.trim_start().starts_with('{') && is_audio_request(&line) {
+                                // Answered here and now: it only checks parameters, and the
+                                // feed has to change before the next frame is due.
+                                let response = rpc.handle_line(&line);
+                                let next = AudioFeed::after(&response, feed);
+                                if next != feed {
+                                    feed = next;
+                                    audio_clock = feed.map(AudioFeed::clock);
+                                    sent_live = true;
+                                }
+                                framed_writer.send(serde_json::to_string(&response).map_err(|e| e.to_string())?)
+                                    .await.map_err(|e| e.to_string())?;
+                            } else if line.trim_start().starts_with('{') || line.trim_start().starts_with('[') {
                                 let service = rpc.clone();
                                 let responses = responses_tx.clone();
                                 match inflight.clone().try_acquire_owned() {
@@ -246,6 +348,16 @@ impl IpcSocket {
                 Some(response) = responses_rx.recv() => {
                     framed_writer.send(serde_json::to_string(&response).map_err(|e| e.to_string())?)
                         .await.map_err(|e| e.to_string())?;
+                }
+                _ = async { audio_clock.as_mut().unwrap().tick().await }, if audio_clock.is_some() => {
+                    let Some(feed) = feed else { continue; };
+                    let audio = AudioReading::take(&tap, feed);
+                    if !audio.live && !sent_live {
+                        continue;
+                    }
+                    sent_live = audio.live;
+                    let frame = serde_json::to_string(&AudioFrame { audio }).map_err(|e| e.to_string())?;
+                    framed_writer.send(frame).await.map_err(|e| e.to_string())?;
                 }
                 status = rx.next() => {
                     let Some(status) = status else { return Ok(()); };
@@ -358,6 +470,56 @@ mod tests {
         );
         assert_eq!(status.prototype.up_next_origins, vec!["explicit"]);
         assert_eq!(queue.queue.read().unwrap().len(), 101);
+    }
+
+    #[test]
+    fn audio_feed_follows_subscribe_and_unsubscribe_responses() {
+        let current = AudioFeed {
+            fps: 30,
+            bands: 64,
+            waveform: 0,
+        };
+        let subscribed = serde_json::json!({"ok":true,"result":{"subscribed":true,"fps":60,"bands":32,"waveform":128}});
+        assert_eq!(
+            AudioFeed::after(&subscribed, Some(current)),
+            Some(AudioFeed {
+                fps: 60,
+                bands: 32,
+                waveform: 128
+            })
+        );
+        let unsubscribed = serde_json::json!({"ok":true,"result":{"subscribed":false}});
+        assert_eq!(AudioFeed::after(&unsubscribed, Some(current)), None);
+        // A rejected request leaves whatever the connection already had.
+        let failed = serde_json::json!({"ok":false,"error":{"code":"invalid_params"}});
+        assert_eq!(AudioFeed::after(&failed, Some(current)), Some(current));
+        assert_eq!(AudioFeed::after(&failed, None), None);
+    }
+
+    #[test]
+    fn only_audio_methods_are_kept_by_the_connection() {
+        assert!(is_audio_request(
+            r#"{"protocol":"resonance","version":1,"id":1,"method":"audio.subscribe"}"#
+        ));
+        assert!(is_audio_request(r#"{"id":1,"method":"audio.unsubscribe"}"#));
+        assert!(!is_audio_request(r#"{"id":1,"method":"player.status"}"#));
+        assert!(!is_audio_request(r#"{"id":1}"#));
+        assert!(!is_audio_request("not json"));
+    }
+
+    #[test]
+    fn a_silent_tap_reads_as_not_live() {
+        let reading = AudioReading::take(
+            &AudioTap::new(),
+            AudioFeed {
+                fps: 30,
+                bands: 16,
+                waveform: 64,
+            },
+        );
+        assert!(!reading.live);
+        assert!(reading.bands.is_empty() && reading.waveform.is_empty());
+        assert_eq!(reading.beats, 0);
     }
 
     /// Hosts the actual IPC/RPC stack for an externally driven OpenTUI integration test.

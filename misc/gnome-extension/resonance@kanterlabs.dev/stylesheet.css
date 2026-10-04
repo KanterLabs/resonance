@@ -1,0 +1,205 @@
+/* Dark glass in the family of the Spotlight and weather popups. popup.js tints
+   the gradient with each cover's colour. */
+.rz-popup {
+    padding: 18px;
+    spacing: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 26px;
+    background-gradient-direction: vertical;
+    background-gradient-start: rgba(24, 20, 40, 0.78);
+    background-gradient-end: rgba(10, 10, 15, 0.8);
+    box-shadow: 0 18px 54px rgba(0, 0, 0, 0.42);
+    color: #f5f5f7;
+    font-family: "Inter", sans-serif;
+}
+
+/* Header */
+.rz-header {
+    spacing: 16px;
+}
+
+.rz-cover {
+    border-radius: 16px;
+    background-color: rgba(255, 255, 255, 0.08);
+    background-size: cover;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+}
+
+.rz-track {
+    spacing: 2px;
+}
+
+.rz-title {
+    font-size: 21px;
+    font-weight: 800;
+}
+
+.rz-artist {
+    font-size: 14px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.rz-album {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.rz-pills {
+    spacing: 6px;
+    padding-top: 8px;
+}
+
+.rz-pill {
+    spacing: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.1);
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.rz-beat-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 4px;
+    background-color: #39dbd9;
+}
+
+/* Progress */
+.rz-progress-box {
+    spacing: 6px;
+}
+
+.rz-progress {
+    height: 5px;
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+.rz-progress:hover {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+.rz-progress-fill {
+    height: 5px;
+    border-radius: 3px;
+    background-color: #9e70ff;
+}
+
+.rz-time {
+    font-size: 11px;
+    font-feature-settings: "tnum";
+    color: rgba(255, 255, 255, 0.55);
+}
+
+/* Controls */
+.rz-controls {
+    spacing: 8px;
+}
+
+.rz-button {
+    width: 38px;
+    height: 38px;
+    border-radius: 19px;
+    color: #f5f5f7;
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.rz-button:hover,
+.rz-button:focus {
+    background-color: rgba(255, 255, 255, 0.18);
+}
+
+.rz-button StIcon {
+    icon-size: 16px;
+}
+
+.rz-play {
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    color: #111;
+    background-color: rgba(255, 255, 255, 0.92);
+}
+
+.rz-play:hover,
+.rz-play:focus {
+    background-color: #fff;
+}
+
+.rz-play StIcon {
+    icon-size: 18px;
+}
+
+.rz-mode {
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.6);
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.rz-mode:hover,
+.rz-mode:focus {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+.rz-mode:checked {
+    color: #111;
+    background-color: rgba(255, 255, 255, 0.9);
+}
+
+/* Visualizer */
+.rz-disc {
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.06);
+    background-size: cover;
+    box-shadow: 0 0 26px rgba(0, 0, 0, 0.55);
+}
+
+.rz-message {
+    font-size: 15px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Up next */
+.rz-section-title {
+    padding: 2px 4px 0;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.rz-up-next {
+    spacing: 2px;
+}
+
+.rz-next-row {
+    spacing: 10px;
+    padding: 6px 4px;
+}
+
+.rz-next-title {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.rz-next-artist {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.rz-origin {
+    padding: 1px 8px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.1);
+    font-size: 10px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.7);
+}

@@ -68,6 +68,8 @@ export type ScreenFactory = (context: ScreenContext, params?: Params) => Screen;
  * session.info -> {instance_id,version,capabilities:string[]}
  * player.action {action:"play_pause"|"previous"|"next"|"stop"|"seek"|"volume"|"repeat"|"shuffle"|"play",value?,uri?}
  * player.artwork {uri?,width?:1..40,height?:1..20} -> {available,uri,width,height,pixels?:string[],reason?}; two RGB pixel rows per terminal row
+ * audio.subscribe {fps?:1..60,bands?:0..128,waveform?:0..512} -> {subscribed,fps,bands,waveform}; this connection then also gets
+ *   {audio:{live,bands,waveform,level,pulse,beats,tempo}} lines at fps while sound plays. audio.unsubscribe -> {subscribed:false}
  * queue.list {offset?,limit?} -> Page (row.id is an entry identity, meta.index/current; revision)
  * queue.action {action:"play"|"remove"|"move"|"clear"|"append"|"play_next"|"save",entry_id?,revision?,to?,uri?,name?}
  * library.list {kind:"tracks"|"albums"|"artists"|"playlists"|"shows"|"browse",offset?,limit?,filter?,sort?} -> Page

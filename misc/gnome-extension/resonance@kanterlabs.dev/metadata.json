@@ -1,0 +1,13 @@
+{
+  "name": "Resonance",
+  "description": "What Resonance is playing, with live visualizers drawn from its audio feed. Press Super+M to open and close.",
+  "uuid": "resonance@kanterlabs.dev",
+  "settings-schema": "org.gnome.shell.extensions.resonance",
+  "shell-version": [
+    "48",
+    "49",
+    "50"
+  ],
+  "version": 1,
+  "url": "https://github.com/KanterLabs/resonance"
+}

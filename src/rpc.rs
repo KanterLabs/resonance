@@ -25,6 +25,8 @@ const METHODS: &[&str] = &[
     "player.status",
     "player.action",
     "player.artwork",
+    "audio.subscribe",
+    "audio.unsubscribe",
     "queue.list",
     "queue.action",
     "library.list",
@@ -50,6 +52,16 @@ const METHODS: &[&str] = &[
     "cast.action",
     "share",
 ];
+/// Bounds on the audio feed. Sixty frames a second keeps up with most displays,
+/// and a client wanting more can interpolate between frames.
+const AUDIO_MIN_FPS: usize = 1;
+const AUDIO_MAX_FPS: usize = 60;
+const AUDIO_DEFAULT_FPS: usize = 30;
+const AUDIO_MAX_BANDS: usize = 128;
+const AUDIO_DEFAULT_BANDS: usize = 64;
+/// The analysis window only holds 1024 samples, so more points than this would
+/// just repeat them.
+const AUDIO_MAX_WAVEFORM: usize = 512;
 #[derive(Debug)]
 struct Error {
     code: &'static str,
@@ -802,6 +814,20 @@ impl RpcService {
             }
             "player.action" => self.player_action(p),
             "player.artwork" => self.player_artwork(p),
+            // The feed itself belongs to the connection, which reads these results to
+            // start or stop it. Here they are only checked and filled in.
+            "audio.subscribe" => {
+                let fps = number(p, "fps", AUDIO_DEFAULT_FPS, AUDIO_MAX_FPS)?;
+                if fps < AUDIO_MIN_FPS {
+                    return Err(invalid(format!(
+                        "fps must be from {AUDIO_MIN_FPS} to {AUDIO_MAX_FPS}"
+                    )));
+                }
+                let bands = number(p, "bands", AUDIO_DEFAULT_BANDS, AUDIO_MAX_BANDS)?;
+                let waveform = number(p, "waveform", 0, AUDIO_MAX_WAVEFORM)?;
+                Ok(json!({"subscribed":true,"fps":fps,"bands":bands,"waveform":waveform}))
+            }
+            "audio.unsubscribe" => Ok(json!({"subscribed":false})),
             "library.action" => self.library_action(p),
             "playlist.action" => self.playlist_action(p),
             "radio.status" => {
@@ -2269,5 +2295,37 @@ mod tests {
         assert_eq!(result["available"], false);
         assert_eq!(result["reason"], "current_mismatch");
         assert_eq!(result["uri"], "spotify:track:stale");
+    }
+
+    #[test]
+    fn audio_subscribe_fills_in_defaults_and_rejects_out_of_range_rates() {
+        let service = service();
+        let result = service.dispatch("audio.subscribe", &json!({})).unwrap();
+        assert_eq!(
+            result,
+            json!({"subscribed":true,"fps":30,"bands":64,"waveform":0})
+        );
+        let result = service
+            .dispatch(
+                "audio.subscribe",
+                &json!({"fps":60,"bands":12,"waveform":256}),
+            )
+            .unwrap();
+        assert_eq!(result["fps"], 60);
+        assert_eq!(result["bands"], 12);
+        assert_eq!(result["waveform"], 256);
+        for params in [
+            json!({"fps":0}),
+            json!({"fps":61}),
+            json!({"bands":129}),
+            json!({"waveform":513}),
+        ] {
+            let error = service.dispatch("audio.subscribe", &params).unwrap_err();
+            assert_eq!(error.code, "invalid_params", "{params}");
+        }
+        assert_eq!(
+            service.dispatch("audio.unsubscribe", &json!({})).unwrap(),
+            json!({"subscribed":false})
+        );
     }
 }
