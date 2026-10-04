@@ -10,14 +10,15 @@ import { createBrowseScreen } from "../screens/browse/index.js";
 import { createPlaylistsScreen } from "../screens/playlists/index.js";
 import { createPodcastsScreen } from "../screens/podcasts/index.js";
 import { createRadioScreen } from "../screens/radio/index.js";
+import { createArcsScreen } from "../screens/arcs/index.js";
 import { createSettingsScreen } from "../screens/settings/index.js";
 import { createHelpScreen } from "../screens/help/index.js";
 import { createCastScreen } from "../screens/cast/index.js";
 import { keyBindingName, routeForCommand, WORKSPACE_BINDINGS } from "./bindings.js";
 
-const FACTORIES: Record<Route, ScreenFactory> = { "now-playing": createNowPlayingScreen, queue: createQueueScreen, library: createLibraryScreen, search: createSearchScreen, browse: createBrowseScreen, playlists: createPlaylistsScreen, podcasts: createPodcastsScreen, radio: createRadioScreen, settings: createSettingsScreen, help: createHelpScreen, cast: createCastScreen };
-const SHORTCUTS: Record<string, Route> = { "1": "now-playing", "2": "queue", "3": "library", "4": "search", "5": "playlists", "6": "podcasts", "7": "radio", "8": "settings", "9": "cast", b: "browse", "?": "help" };
-const LABELS: Record<Route, string> = { "now-playing": "1 Play", queue: "2 Queue", library: "3 Library", search: "4 Search", browse: "B Browse", playlists: "5 Lists", podcasts: "6 Pods", radio: "7 Radio", settings: "8 Setup", help: "? Help", cast: "9 Cast" };
+const FACTORIES: Record<Route, ScreenFactory> = { "now-playing": createNowPlayingScreen, queue: createQueueScreen, library: createLibraryScreen, search: createSearchScreen, browse: createBrowseScreen, playlists: createPlaylistsScreen, podcasts: createPodcastsScreen, radio: createRadioScreen, arcs: createArcsScreen, settings: createSettingsScreen, help: createHelpScreen, cast: createCastScreen };
+const SHORTCUTS: Record<string, Route> = { "1": "now-playing", "2": "queue", "3": "library", "4": "search", "5": "playlists", "6": "podcasts", "7": "radio", "8": "settings", "9": "cast", "0": "arcs", b: "browse", "?": "help" };
+const LABELS: Record<Route, string> = { "now-playing": "1 Play", queue: "2 Queue", library: "3 Library", search: "4 Search", browse: "B Browse", playlists: "5 Lists", podcasts: "6 Pods", radio: "7 Radio", arcs: "0 Arcs", settings: "8 Setup", help: "? Help", cast: "9 Cast" };
 export interface WorkspaceOptions {
   api: RpcApi;
   theme: ThemeName;

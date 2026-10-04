@@ -34,6 +34,7 @@ free accounts.
 - IPC socket and MPRIS controls for desktop integrations
 - Spotify Connect and Roku casting
 - A local radio station ranked from cached library metadata
+- Arcs: build playlists by shaping an energy curve, with every track's placement explained
 - Deterministic radio diagnostics and offline replay snapshots with `radio-debug`
 
 ## Installation
@@ -134,7 +135,7 @@ library caches, queue, radio, and persisted user data remain owned by Rust. Exis
 configuration and cache paths continue to be used when present.
 
 The workspace includes Now Playing, Queue, Library, Search, Browse, Playlists, Podcasts, Radio,
-Settings, Help, and Cast. Use **1–9**, **B**, and **?** to switch screens, **Space** to play/pause,
+Arcs, Settings, Help, and Cast. Use **0–9**, **B**, and **?** to switch screens, **Space** to play/pause,
 **Shift+R** to start radio, **L** to change appearance, **:** for commands, and **q** or **Ctrl+C**
 to quit. Focused text inputs capture normal typing. **Esc** cancels a prompt or returns to Now
 Playing. Each screen shows its own action keys.

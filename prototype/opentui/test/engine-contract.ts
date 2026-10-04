@@ -77,6 +77,18 @@ try {
   assert.equal(lastStatus?.prototype?.up_next[0]?.title, "Fixture Alpha");
   assert.equal(lastStatus?.prototype?.up_next[1]?.title, "Fixture Beta");
   await client.call("radio.action", { action: "stop" });
+  // Arcs build from the same cache as radio, without Spotify.
+  const arcState = await client.call<{ presets: unknown[]; fingerprinted: number }>("builder.state");
+  assert.equal(arcState.presets.length, 5);
+  type ArcReply = { slots: { uri: string; seed: boolean; pinned: boolean }[]; notes: string[] };
+  const arc = await client.call<ArcReply>("builder.build", { recipe: { seeds: ["spotify:track:FixtureTrackAlpha00001"], length: { tracks: 5 } } });
+  assert.equal(arc.slots.length, 2, "arc did not use both cached fixture tracks");
+  assert.ok(arc.slots.some(slot => slot.seed && slot.uri === "spotify:track:FixtureTrackAlpha00001"), "arc seed missing from its arc");
+  assert.ok(arc.notes.some(note => note.includes("ran out")), "short arc did not explain its length");
+  const pinnedArc = await client.call<ArcReply>("builder.pin", { slot: 1, pinned: true });
+  assert.equal(pinnedArc.slots[1]?.pinned, true);
+  await assert.rejects(client.call("builder.reroll", { slot: 9 }), error => error instanceof RpcError && error.code === "arc_error");
+  await assert.rejects(client.call("builder.build", { recipe: { curve: [{ x: 0, energy: 0.5 }] } }), error => error instanceof RpcError && error.code === "invalid_params");
   await assert.rejects(client.call("player.action", { action: "volume", value: 101 }), error => error instanceof RpcError && error.code === "invalid_params");
   await assert.rejects(client.call("unknown.method"), error => error instanceof RpcError && error.code === "unknown_method");
 
@@ -160,7 +172,7 @@ try {
   await client.call("settings.action", { action: "command", command: "quit" });
   assert.equal(await fixture.exited, 0, await stderr);
   assert.ok(!existsSync(socket), "Server socket leaked after shutdown");
-  console.log("Engine contract passed: real Rust RPC, cached search Enter, quick-search play now/next/queue, isolated radio, explicit priority, context playback, stale edits, status broadcasts, all OpenTUI routes in both themes.");
+  console.log("Engine contract passed: real Rust RPC, cached search Enter, quick-search play now/next/queue, isolated radio, explicit priority, cached arcs, context playback, stale edits, status broadcasts, all OpenTUI routes in both themes.");
 } catch (error) { console.error(await Promise.race([stderr, delay(10).then(() => "")])); throw error; }
 finally {
   app?.dispose(); renderer?.destroy(); client.close();

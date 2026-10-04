@@ -13,6 +13,7 @@ use resonance::program_arguments;
 mod application;
 mod audio_tap;
 mod authentication;
+mod builder;
 mod cast;
 mod cli;
 mod command;

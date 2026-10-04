@@ -17,6 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod builder;
+
 pub const VERSION: u64 = 1;
 const METHODS: &[&str] = &[
     "session.info",
@@ -33,6 +35,15 @@ const METHODS: &[&str] = &[
     "radio.status",
     "radio.action",
     "radio.debug",
+    "builder.state",
+    "builder.coverage",
+    "builder.build",
+    "builder.reroll",
+    "builder.choose",
+    "builder.pin",
+    "builder.ban",
+    "builder.play",
+    "builder.save",
     "settings.get",
     "settings.action",
     "cast.list",
@@ -968,6 +979,7 @@ impl RpcService {
                 }
                 Ok(json!({"applied":true}))
             }
+            method if method.starts_with("builder.") => builder::dispatch(self, method, p),
             "cast.list" => self.cast_list(p),
             "cast.action" => self.cast_action(p),
             "share" => {

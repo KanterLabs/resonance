@@ -3,13 +3,14 @@ import type { Row } from "../../workspace/contracts.js";
 export const GLOBAL_SHORTCUTS = [
   ["1", "Now Playing"], ["2", "Queue"], ["3", "Library"], ["4", "Search"],
   ["5", "Playlists"], ["6", "Podcasts"], ["7", "Radio"], ["8", "Settings"],
-  ["9", "Cast"], ["b", "Browse"], ["?", "Help"], [":", "Command palette"],
+  ["9", "Cast"], ["0", "Arcs playlist builder"], ["b", "Browse"], ["?", "Help"], [":", "Command palette"],
 ] as const;
 
 export function helpRows(bindings: Record<string, string>): Row[] {
   return [
     { id: "command", kind: "action", title: "Run Resonance command", subtitle: ": or Enter · existing CLI commands and aliases" },
     ...GLOBAL_SHORTCUTS.map(([key, title]) => ({ id: `global:${key}`, kind: "shortcut", title: `${key}  ${title}`, subtitle: "Workspace shortcut" })),
+    { id: "arc", kind: "shortcut", title: "arc  Build an arc from the playing song", subtitle: "Arcs: Tab focus · ←→↑↓ shape the energy curve · p preset · Enter build · r reroll · k pin · x ban · P play · s save" },
     { id: "quick-search", kind: "shortcut", title: "/  Quick search in Now Playing", subtitle: "Type a song · ↑/↓ select · Enter play now · Ctrl+N play next · Ctrl+E queue · Esc close" },
     ...Object.entries(bindings).sort(([a], [b]) => a.localeCompare(b)).map(([key, command]) => ({ id: `binding:${key}`, kind: "binding", title: key, subtitle: command })),
   ];

@@ -44,6 +44,7 @@ impl Engine {
             config.clone(),
         ));
         let queue = Arc::new(Queue::new(spotify.clone(), config.clone(), library.clone()));
+        crate::builder::fingerprint::start(spotify.clone(), queue.clone());
 
         #[cfg(feature = "mpris")]
         {
@@ -297,6 +298,7 @@ impl Engine {
         self.running = false;
         self.queue.finish_listening();
         crate::recommendations::history::shared().flush();
+        crate::builder::fingerprint::flush();
         self.queue.cancel_radio();
         let queue = self.queue.queue.read().unwrap().clone();
         let random_order = self.queue.get_random_order();

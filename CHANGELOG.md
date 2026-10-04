@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Arcs, a playlist builder on the OpenTUI **0** screen: pick seed songs, shape an energy curve
+  (or choose a preset), and Resonance fills each slot from the local cache with an explanation,
+  then plays it or saves it as a private Spotify playlist. Slots can be rerolled, pinned, or
+  banned. See [the Arcs guide](doc/playlist-builder.md).
+- Learn each track's energy, tempo, brightness, and how it starts and ends by sampling the audio
+  tap during normal playback. Only summary numbers are stored (`fingerprints.json` in the cache
+  directory), never audio.
+
 ### Changed
 
 - Rename the maintained application to Resonance. New Unix installs use the `resonance` backend,

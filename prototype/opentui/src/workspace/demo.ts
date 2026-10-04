@@ -1,6 +1,7 @@
 import { DEMO_TRACKS, demoStatus, type ParsedStatus, type Playable, type Track } from "../status.js";
 import { RpcError } from "./client.js";
 import { RPC_VERSION, type Page, type Params, type Row, type RpcApi } from "./contracts.js";
+import { DemoArcs } from "./demo-arcs.js";
 
 const source = "offline preview";
 const clone = <T>(value: T): T => structuredClone(value);
@@ -32,6 +33,7 @@ export class DemoApi implements RpcApi {
   private categories: Row[] = [{ id: "category-1", kind: "category", title: "Focus", subtitle: "Offline demo category" }, { id: "category-2", kind: "category", title: "Electronic", subtitle: "Offline demo category" }];
   private casts: Row[] = [{ id: "cast-1", kind: "device", title: "Demo living room", subtitle: "Simulated speaker", meta: { active: false, is_active: false } }, { id: "cast-2", kind: "device", title: "Demo desk", subtitle: "Simulated speaker", meta: { active: false, is_active: false } }];
 
+  private arcs = new DemoArcs(() => this.tracks, () => this.status.playable?.uri, uri => this.player({ action: "play", uri }));
   constructor(private onStatus?: (status: ParsedStatus) => void) { this.status.playable = this.playable(this.queue[0]!); this.publish(); }
   tick(): void {
     if (this.status.mode.kind !== "playing") return;
@@ -92,6 +94,7 @@ export class DemoApi implements RpcApi {
   private entries(items: Row[]): Row[] { return items.map(row => ({ ...clone(row), id: `entry-${++this.nextId}`, meta: { playable_id: row.id } })); }
   async call<T = unknown>(method: string, p: Params = {}): Promise<T> { return clone(this.dispatch(method, p)) as T; }
   private dispatch(method: string, p: Params): unknown {
+    if (method.startsWith("builder.")) return this.arcs.dispatch(method, p);
     switch (method) {
       case "session.info": return { instance_id: "offline-demo", version: RPC_VERSION, capabilities: ["player", "queue", "library", "search", "playlists", "podcasts", "radio", "settings", "cast"], source };
       case "queue.list": return this.page(this.queue.map((row, i) => ({ ...row, meta: { ...row.meta, index: i, current: row.id === this.currentId } })), p, String(this.revision));

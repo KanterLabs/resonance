@@ -6,5 +6,7 @@ test("custom Resonance bindings preserve modifiers and map UI commands locally",
   expect(keyBindingName({ name: "space" })).toBe("Space");
   expect(routeForCommand("focus queue")).toEqual({ route: "queue" });
   expect(routeForCommand("search ambient jazz")).toEqual({ route: "search", params: { query: "ambient jazz" } });
+  expect(routeForCommand("arc")).toEqual({ route: "arcs", params: { fromCurrent: true } });
+  expect(routeForCommand("focus arcs")).toEqual({ route: "arcs" });
   expect(routeForCommand("newplaylist Private title")).toBeNull();
 });
