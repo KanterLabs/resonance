@@ -53,3 +53,16 @@ pub fn radio_debug(
     println!("{report}");
     Ok(())
 }
+
+/// Print an Arcs playlist built from cached music, without logging in or making a request.
+pub fn arcs_debug(
+    seeds: Vec<String>,
+    preset: Option<String>,
+    tracks: usize,
+    discovery: u8,
+    rng_seed: u64,
+) -> Result<(), String> {
+    let report = crate::builder::offline_report(seeds, preset, tracks, discovery, rng_seed)?;
+    print!("{report}");
+    Ok(())
+}

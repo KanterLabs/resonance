@@ -11,6 +11,7 @@ pub mod transition;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,7 @@ pub fn pool(queue: &Queue, library: &Library, seeds: &[Track], discovery: u8) ->
     let store = fingerprint::shared();
     let fingerprints = store.lookup(catalog.tracks.iter().chain(seeds));
     let energies = store.energies();
+    let heard = heard_energy(catalog.tracks.iter().chain(seeds), &fingerprints);
     Pool::build(&PoolInput {
         catalog: &catalog,
         seeds,
@@ -84,7 +86,29 @@ pub fn pool(queue: &Queue, library: &Library, seeds: &[Track], discovery: u8) ->
         recent: &recent,
         fingerprints: &fingerprints,
         library_energies: &energies,
+        heard: &heard,
     })
+}
+
+/// Loudness the waveform learned for tracks without a fingerprint. Streamed audio is loudness
+/// normalized, so heard levels sit between roughly 0.4 and 0.95; that band is stretched onto
+/// the 0 to 1 energy scale directly rather than ranked, which would exaggerate small gaps.
+fn heard_energy<'a>(
+    tracks: impl IntoIterator<Item = &'a Track>,
+    fingerprints: &HashMap<String, fingerprint::Fingerprint>,
+) -> HashMap<String, f64> {
+    const QUIET: f32 = 0.4;
+    const LOUD: f32 = 0.95;
+    let waveforms = crate::waveform::shared();
+    tracks
+        .into_iter()
+        .filter(|track| !fingerprints.contains_key(&track.uri))
+        .filter_map(|track| {
+            let level = waveforms.loudness(track.id.as_deref()?)?;
+            let energy = ((level - QUIET) / (LOUD - QUIET)).clamp(0.0, 1.0);
+            Some((track.uri.clone(), f64::from(energy)))
+        })
+        .collect()
 }
 
 fn rebuild(active: &mut Active, uris: &[String]) {
@@ -266,6 +290,105 @@ impl Service {
         }
         result
     }
+}
+
+/// Build an arc from the cache without logging in and describe it, for `arcs-debug`.
+pub fn offline_report(
+    seeds: Vec<String>,
+    preset: Option<String>,
+    tracks: usize,
+    discovery: u8,
+    rng_seed: u64,
+) -> Result<String, String> {
+    use std::fmt::Write;
+    let catalog = recommendations::offline_catalog()?;
+    let find = |wanted: &str| {
+        catalog
+            .tracks
+            .iter()
+            .find(|track| track.uri == wanted || track.id.as_deref() == Some(wanted))
+            .cloned()
+            .ok_or_else(|| format!("Seed {wanted} isn't in the local catalog"))
+    };
+    let seeds = if seeds.is_empty() {
+        vec![
+            catalog
+                .tracks
+                .iter()
+                .find(|track| !track.is_local && track.id.is_some())
+                .cloned()
+                .ok_or("No cached songs; play or search for music first")?,
+        ]
+    } else {
+        seeds
+            .iter()
+            .map(|seed| find(seed))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let preset = match preset {
+        Some(id) => recipe::Preset::from_id(&id).ok_or_else(|| {
+            let known: Vec<_> = recipe::Preset::ALL.iter().map(|p| p.id()).collect();
+            format!("Unknown preset {id}; choose one of {}", known.join(", "))
+        })?,
+        None => recipe::Preset::RiseAndFall,
+    };
+    let mut recipe = Recipe {
+        seeds: seeds.iter().map(|track| track.uri.clone()).collect(),
+        curve: preset.curve(),
+        length: recipe::Length::Tracks(tracks),
+        discovery,
+        rng_seed,
+        preset: Some(preset.id().to_string()),
+        ..Recipe::default()
+    };
+    recipe.normalize()?;
+    let history = history::shared();
+    let store = fingerprint::shared();
+    let fingerprints = store.lookup(catalog.tracks.iter().chain(&seeds));
+    let heard = heard_energy(catalog.tracks.iter().chain(&seeds), &fingerprints);
+    let pool = Pool::build(&PoolInput {
+        catalog: &catalog,
+        seeds: &seeds,
+        discovery: recipe.discovery,
+        feedback: &history.snapshot(),
+        recent: &history.recent(),
+        fingerprints: &fingerprints,
+        library_energies: &store.energies(),
+        heard: &heard,
+    });
+    let started = std::time::Instant::now();
+    let draft = solve::solve(&pool, &recipe);
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "{} arc from {} · {} tracks · pool {} of {} cached · {} fingerprinted · {} heard · confidence {:.0}% · {} ms",
+        preset.label(),
+        seeds[0].title,
+        draft.slots.len(),
+        pool.len(),
+        catalog.tracks.len(),
+        store.len(),
+        heard.len(),
+        draft.confidence * 100.0,
+        started.elapsed().as_millis()
+    );
+    for note in &draft.notes {
+        let _ = writeln!(out, "note: {note}");
+    }
+    for (index, slot) in draft.slots.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "{:>2}. target {:.2} energy {:.2} {:<10} {} — {}  [{}]",
+            index + 1,
+            slot.target,
+            slot.energy,
+            format!("{:?}", slot.measure).to_lowercase(),
+            slot.track.title,
+            slot.track.artists.join(", "),
+            slot.reasons.join("; ")
+        );
+    }
+    Ok(out)
 }
 
 fn check_slot(draft: &Draft, slot: usize) -> Result<(), String> {

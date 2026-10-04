@@ -58,6 +58,47 @@ pub fn program_arguments() -> clap::Command {
                 .help("replay an immutable radio-debug snapshot"),
         );
 
+    let arcs_debug = clap::Command::new("arcs-debug")
+        .about("Build an Arcs playlist from cached music and print it, without logging in")
+        .arg(
+            clap::Arg::new("seed")
+                .long("seed")
+                .value_name("URI_OR_ID")
+                .action(clap::ArgAction::Append)
+                .help("a starting song; repeat for up to five"),
+        )
+        .arg(
+            clap::Arg::new("preset")
+                .long("preset")
+                .value_name("NAME")
+                .default_value("rise_and_fall")
+                .help("rise_and_fall, steady_focus, build_to_peak, wind_down or run"),
+        )
+        .arg(
+            clap::Arg::new("tracks")
+                .long("tracks")
+                .value_name("N")
+                .value_parser(clap::builder::RangedU64ValueParser::<usize>::new().range(5..=100))
+                .default_value("18")
+                .help("arc length in tracks (5-100; default: 18)"),
+        )
+        .arg(
+            clap::Arg::new("discovery")
+                .long("discovery")
+                .value_name("PERCENT")
+                .value_parser(clap::builder::RangedU64ValueParser::<u8>::new().range(0..=100))
+                .default_value("30")
+                .help("familiar (0) to new (100); default: 30"),
+        )
+        .arg(
+            clap::Arg::new("rng-seed")
+                .long("rng-seed")
+                .value_name("N")
+                .value_parser(clap::value_parser!(u64))
+                .default_value("0")
+                .help("deterministic variation (default: 0)"),
+        );
+
     clap::Command::new(BIN_NAME)
         .version(env!("VERSION"))
         .author(AUTHOR)
@@ -103,12 +144,42 @@ pub fn program_arguments() -> clap::Command {
         .subcommands([
             clap::Command::new("info").about("Print platform information like paths"),
             radio_debug,
+            arcs_debug,
         ])
 }
 
 #[cfg(test)]
 mod tests {
     use super::{BIN_NAME, program_arguments};
+
+    #[test]
+    fn parses_arcs_debug_seeds_and_bounds() {
+        let matches = program_arguments()
+            .try_get_matches_from([
+                BIN_NAME,
+                "arcs-debug",
+                "--seed",
+                "a",
+                "--seed",
+                "b",
+                "--tracks",
+                "12",
+            ])
+            .unwrap();
+        let (_, args) = matches.subcommand().unwrap();
+        let seeds: Vec<&String> = args.get_many::<String>("seed").unwrap().collect();
+        assert_eq!(seeds, ["a", "b"]);
+        assert_eq!(args.get_one::<usize>("tracks"), Some(&12));
+        assert_eq!(
+            args.get_one::<String>("preset").map(String::as_str),
+            Some("rise_and_fall")
+        );
+        assert!(
+            program_arguments()
+                .try_get_matches_from([BIN_NAME, "arcs-debug", "--tracks", "4"])
+                .is_err()
+        );
+    }
 
     #[test]
     fn parses_radio_debug_defaults_and_controls() {

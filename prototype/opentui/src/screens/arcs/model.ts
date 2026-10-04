@@ -14,7 +14,7 @@ export interface Recipe {
   rng_seed: number;
   preset?: string | null;
 }
-export type Measure = "measured" | "estimated" | "unmeasured";
+export type Measure = "measured" | "heard" | "estimated" | "unmeasured";
 export interface ArcSlot {
   slot: number;
   uri: string;
@@ -41,6 +41,7 @@ export interface ArcDraft {
   targets: number[];
   confidence: number;
   measured: number;
+  heard?: number;
   estimated: number;
   unmeasured: number;
   pool_size: number;
@@ -58,8 +59,6 @@ export interface ArcState {
   current?: SeedRow | null;
   seeds?: SeedRow[];
 }
-export type Focus = "curve" | "dials" | "draft";
-export const FOCUS_ORDER: Focus[] = ["curve", "dials", "draft"];
 
 const points = (levels: number[]): CurvePoint[] => levels.map((energy, i) => ({ x: i / (levels.length - 1), energy }));
 /** Mirrors the engine's presets so the screen can draw before the engine answers. */
@@ -167,19 +166,46 @@ export function formatDuration(ms: number): string {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
 }
 export function slotDetail(slot: ArcSlot): string {
-  const energy = `${energyBlock(slot.energy)} ${slot.energy.toFixed(2)}${slot.measure === "measured" ? "" : "~"}`;
-  const tempo = slot.tempo ? `${Math.round(slot.tempo)} BPM` : "—";
-  const why = slot.reasons.find(reason => reason !== "pinned" && reason !== "seed") ?? slot.reasons[0] ?? "";
-  return `${energy} · ${tempo} · ${why}`;
+  const learned: Record<Measure, string> = { measured: "", heard: "heard", estimated: "est.", unmeasured: "new" };
+  const tags = [slot.tempo ? `${Math.round(slot.tempo)} BPM` : "", learned[slot.measure], slot.pinned ? "kept" : "", slot.seed ? "seed" : ""].filter(Boolean);
+  return tags.join(" · ");
 }
 export function slotRow(slot: ArcSlot, id = `slot-${slot.slot}`): Row {
-  const mark = slot.pinned ? "◆" : slot.seed ? "✦" : " ";
-  return { id, kind: "track", title: `${String(slot.slot + 1).padStart(2, " ")} ${mark} ${slot.title}`, subtitle: slot.artists.join(", "), detail: slotDetail(slot), uri: slot.uri, duration_ms: slot.duration_ms, meta: { slot: slot.slot } };
+  const mark = slot.pinned ? "◆" : slot.seed ? "✦" : slot.measure === "unmeasured" ? "·" : energyBlock(slot.energy);
+  return { id, kind: "track", title: `${String(slot.slot + 1).padStart(2, "0")} ${mark} ${slot.title}`, subtitle: slot.artists.join(", "), detail: slotDetail(slot), uri: slot.uri, duration_ms: slot.duration_ms, meta: { slot: slot.slot } };
+}
+/** Why a track sits where it does, in plain words. */
+export function whyLine(slot: ArcSlot): string {
+  const reasons = slot.reasons.filter(reason => reason !== "pinned" && reason !== "seed");
+  const tags = [slot.pinned ? "kept in place" : "", slot.seed ? "one of your starting songs" : ""].filter(Boolean);
+  return `Why ${slot.title}: ${[...tags, ...reasons].join(" · ") || "fits the arc"}`;
 }
 export function slotExplanation(slot: ArcSlot): string {
-  return `${slot.reasons.join(" · ")} · fit ${Math.round(slot.curve_fit * 100)}% · flow ${Math.round(slot.transition * 100)}% · affinity ${Math.round(slot.affinity * 100)}%`;
+  return `${whyLine(slot)} · fit ${Math.round(slot.curve_fit * 100)}% · flow ${Math.round(slot.transition * 100)}% · match ${Math.round(slot.affinity * 100)}%`;
 }
+export function mixLabel(discovery: number): string {
+  return `familiar ${dial(discovery, 8)} new`;
+}
+export type Legend = "arc" | "edit" | "swap" | "seed" | "empty";
+/** Narrow-terminal legends: the same keys in fewer words, so nothing is cut off at 80 columns. */
+export const COMPACT_LEGENDS: Record<Legend, [string, string]> = {
+  arc: ["↑↓ pick  ⏎ play here  p play  r swap  k keep  x remove  s save", "←→ shape  e curve  −+ length  [] mix  g remix  / add  c playing"],
+  edit: ["Curve: ←→ point  ↑↓ raise/lower  ⏎/Esc done", "The arc rebuilds as you edit"],
+  swap: ["Swap: ↑↓ pick  ⏎ use it  Esc keep current", ""],
+  seed: ["Add song: ↑↓ pick  ⏎ add  Esc back", ""],
+  empty: ["Play a song, then press c to build an arc", "/ search for a starting song  ·  ←→ shape"],
+};
+export const LEGENDS: Record<Legend, [string, string]> = {
+  arc: ["↑↓ pick  ⏎ play from here  p play all  r swap  k keep  x remove  s save", "←→ shape  e edit curve  −/+ length  [/] mix  g remix  / add song  c from playing  ⌫ drop song"],
+  edit: ["Editing curve: ←→ choose point  ↑↓ raise/lower", "⏎ or Esc done  ·  the arc rebuilds as you edit"],
+  swap: ["Swap: ↑↓ pick a replacement  ⏎ use it", "Esc keep the current track"],
+  seed: ["Add a starting song: ↑↓ pick  ⏎ add", "Esc back to the arc"],
+  empty: ["Play a song, then press c to build an arc from it", "/ search for a starting song  ·  ←→ choose a shape first if you like"],
+};
 export function summary(draft: ArcDraft): string {
-  const measured = draft.slots.length ? Math.round(draft.measured / draft.slots.length * 100) : 0;
-  return `${draft.slots.length} tracks · ${formatDuration(draft.duration_ms)} · confidence ${Math.round(draft.confidence * 100)}% · ${measured}% measured${draft.notes.length ? ` · ${draft.notes[0]}` : ""}`;
+  const count = draft.slots.length;
+  const known = draft.slots.filter(slot => slot.measure !== "unmeasured").length;
+  const head = `${count} track${count === 1 ? "" : "s"} · ${formatDuration(draft.duration_ms)}`;
+  if (count && known * 2 < count) return `${head} · energy known for ${known} of ${count}: play the arc and each song teaches the shape`;
+  return `${head} · confidence ${Math.round(draft.confidence * 100)}% · energy known for ${known} of ${count}`;
 }

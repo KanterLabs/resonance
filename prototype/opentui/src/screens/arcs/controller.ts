@@ -24,6 +24,9 @@ export class ArcsController {
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
+  private loaded = false;
+  /** When the status line last changed, so a selection can take it over afterwards. */
+  statusAt = 0;
 
   constructor(private api: RpcApi, private onChange: () => void, private debounceMs = 400) {}
 
@@ -41,8 +44,9 @@ export class ArcsController {
       this.fingerprinted = Number(state?.fingerprinted) || 0;
       for (const seed of [...(state?.seeds ?? []), ...(this.current ? [this.current] : [])]) this.seedInfo.set(seed.uri, seed);
       this.draft = state?.draft ?? null;
-      this.say(this.draft ? "Arc restored · Enter rebuilds" : "Enter builds an arc from the song playing now");
-      if (buildNow) await this.build(true);
+      this.say(this.draft ? "Arc restored · c rebuilds from the playing song" : "");
+      this.loaded = true;
+      if (buildNow || (!this.draft && (this.recipe.seeds.length || this.current))) await this.build(buildNow || !this.recipe.seeds.length);
     } catch (reason) { this.fail(reason); }
   }
 
@@ -57,15 +61,17 @@ export class ArcsController {
     clearTimeout(this.timer);
     if (this.disposed) return;
     const request = ++this.generation;
+    if (!fromCurrent && !this.recipe.seeds.length && !this.current) { this.say("Play a song or press / to choose a starting song", true); return; }
     const recipe: Recipe = { ...this.recipe, seeds: fromCurrent && this.current ? [this.current.uri] : this.recipe.seeds };
-    if (fromCurrent) recipe.pins = [];
+    if (fromCurrent) { recipe.pins = []; recipe.bans = []; }
     this.busy = true; this.say("Building arc…");
     try {
       const draft = await this.api.call<ArcDraft>("builder.build", { recipe });
       if (this.disposed || request !== this.generation) return;
       this.accept(draft);
       this.mode = "draft";
-      this.say(`Arc built from ${this.recipe.seeds.length} seed${this.recipe.seeds.length === 1 ? "" : "s"}`);
+      const seeds = this.seeds();
+      this.say(`Built ${draft.slots.length} tracks from ${seeds[0]?.title ?? "your seeds"}${seeds.length > 1 ? ` and ${seeds.length - 1} more` : ""}`);
     } catch (reason) { if (request === this.generation) this.fail(reason); }
     finally { if (request === this.generation) { this.busy = false; this.changed(); } }
   }
@@ -76,7 +82,8 @@ export class ArcsController {
       this.alternatives = result.alternatives ?? [];
       this.alternativeSlot = slot;
       this.mode = "alternatives";
-      this.say(this.alternatives.length ? `Choose a replacement for slot ${slot + 1} · Esc keeps it` : "No other tracks fit this slot");
+      if (!this.alternatives.length) { this.mode = "draft"; this.say("Nothing else fits that spot yet; play more music to widen the pool"); return; }
+      this.say(`Pick a replacement for ${this.draft?.slots[slot]?.title ?? `track ${slot + 1}`}`);
     });
   }
 
@@ -85,7 +92,7 @@ export class ArcsController {
     await this.request(async () => {
       this.accept(await this.api.call<ArcDraft>("builder.choose", { slot, uri }));
       this.mode = "draft";
-      this.say(`Slot ${slot + 1} replaced`);
+      this.say(`Swapped in ${this.draft?.slots[slot]?.title ?? "a new track"}`);
     });
   }
 
@@ -93,7 +100,7 @@ export class ArcsController {
     const pinned = !this.draft?.slots[slot]?.pinned;
     await this.request(async () => {
       this.accept(await this.api.call<ArcDraft>("builder.pin", { slot, pinned }));
-      this.say(pinned ? `Pinned slot ${slot + 1}` : `Unpinned slot ${slot + 1}`);
+      this.say(pinned ? `Keeping ${this.draft?.slots[slot]?.title ?? "it"} in place` : `${this.draft?.slots[slot]?.title ?? "Track"} can move again`);
     });
   }
 
@@ -101,15 +108,30 @@ export class ArcsController {
     const title = this.draft?.slots[slot]?.title ?? "track";
     await this.request(async () => {
       this.accept(await this.api.call<ArcDraft>("builder.ban", { slot }));
-      this.say(`Banned ${title} from this arc`);
+      this.say(`Removed ${title}; it won't come back in this arc`);
     });
   }
 
-  async play(): Promise<void> {
+  async play(slot = 0): Promise<void> {
     await this.request(async () => {
-      const result = await this.api.call<{ queued: number }>("builder.play");
-      this.say(`Playing arc · ${result.queued} tracks`);
+      const result = await this.api.call<{ queued: number }>("builder.play", slot ? { slot } : {});
+      const title = this.draft?.slots[slot]?.title;
+      this.say(slot && title ? `Playing from ${title} · ${result.queued} tracks` : `Playing the arc · ${result.queued} tracks`);
     });
+  }
+
+  /** Same shape and seeds, different picks. Kept tracks stay. */
+  remix(): void {
+    this.recipe = { ...this.recipe, rng_seed: Math.floor(Math.random() * 1_000_000_000) + 1 };
+    void this.build();
+  }
+
+  /** Start over from the playing song, dropping kept and removed tracks. */
+  async useCurrent(): Promise<void> {
+    if (!this.current) { this.say("Nothing is playing; press / to choose a starting song", true); return; }
+    this.seedInfo.set(this.current.uri, this.current);
+    this.recipe = { ...this.recipe, seeds: [this.current.uri], pins: [], bans: [] };
+    await this.build();
   }
 
   async save(name: string): Promise<void> {
@@ -136,7 +158,7 @@ export class ArcsController {
     this.seedInfo.set(seed.uri, seed);
     this.recipe = { ...this.recipe, seeds: [...this.recipe.seeds, seed.uri] };
     this.mode = "draft";
-    this.say(`Added seed ${seed.title}`);
+    this.say(`Added ${seed.title} as a starting song`);
     this.scheduleBuild();
     return true;
   }
@@ -150,7 +172,7 @@ export class ArcsController {
     const removed = this.recipe.seeds.at(-1);
     if (!removed) { this.say("No seeds to remove"); return; }
     this.recipe = { ...this.recipe, seeds: this.recipe.seeds.slice(0, -1) };
-    this.say(`Removed seed ${this.seedInfo.get(removed)?.title ?? removed}`);
+    this.say(`Dropped ${this.seedInfo.get(removed)?.title ?? removed} from the starting songs`);
     if (this.recipe.seeds.length) this.scheduleBuild();
   }
 
@@ -174,7 +196,7 @@ export class ArcsController {
     this.draft = draft;
     if (draft.recipe) {
       const local = this.recipe;
-      this.recipe = { ...normalizeRecipe(draft.recipe), curve: local.curve, preset: local.preset ?? draft.recipe.preset ?? null };
+      this.recipe = { ...normalizeRecipe(draft.recipe), curve: local.curve, preset: local.preset ?? null };
     }
     if (this.current && this.recipe.seeds.includes(this.current.uri)) this.seedInfo.set(this.current.uri, this.current);
   }
@@ -186,9 +208,14 @@ export class ArcsController {
     finally { this.busy = false; this.changed(); }
   }
 
-  setCurrent(seed: SeedRow | null): void { this.current = seed; }
+  /** Follow the playing song; the first one seen builds an arc if there is none yet. */
+  setCurrent(seed: SeedRow | null): void {
+    const first = !this.current && seed;
+    this.current = seed;
+    if (first && this.loaded && !this.draft && !this.busy && !this.recipe.seeds.length) void this.build(true);
+  }
 
-  private say(text: string, error = false): void { this.status = text; this.error = error; this.changed(); }
+  private say(text: string, error = false): void { this.status = text; this.error = error; this.statusAt = Date.now(); this.changed(); }
   private fail(reason: unknown): void { this.say(message(reason), true); }
   private changed(): void { if (!this.disposed) this.onChange(); }
 }

@@ -79,6 +79,15 @@ fn main() -> Result<(), String> {
             *args.get_one::<u8>("discovery").unwrap(),
             args.get_one::<PathBuf>("replay").cloned(),
         ),
+        Some(("arcs-debug", args)) => cli::arcs_debug(
+            args.get_many::<String>("seed")
+                .map(|seeds| seeds.cloned().collect())
+                .unwrap_or_default(),
+            args.get_one::<String>("preset").cloned(),
+            *args.get_one::<usize>("tracks").unwrap(),
+            *args.get_one::<u8>("discovery").unwrap(),
+            *args.get_one::<u64>("rng-seed").unwrap(),
+        ),
         Some((_, _)) => unreachable!(),
         None => {
             #[cfg(unix)]

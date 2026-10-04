@@ -36,6 +36,8 @@ const MIN_NORMALIZATION_SAMPLES: usize = 20;
 #[serde(rename_all = "snake_case")]
 pub enum Measure {
     Measured,
+    /// From the loudness the waveform recorded the last time the track played.
+    Heard,
     Estimated,
     Unmeasured,
 }
@@ -51,6 +53,8 @@ pub struct PoolInput<'a> {
     pub fingerprints: &'a HashMap<String, Fingerprint>,
     /// Every stored raw energy, for normalizing against the library.
     pub library_energies: &'a [f32],
+    /// Normalized loudness of tracks heard before but not fingerprinted, keyed by URI.
+    pub heard: &'a HashMap<String, f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +101,7 @@ pub struct Draft {
     pub targets: Vec<f64>,
     pub confidence: f64,
     pub measured: usize,
+    pub heard: usize,
     pub estimated: usize,
     pub unmeasured: usize,
     pub pool_size: usize,
@@ -228,16 +233,16 @@ impl Pool {
                     .unwrap_or_default();
                 playlists.sort_unstable();
                 playlists.dedup();
+                let heard = input.heard.get(&track.uri).copied();
+                let (energy, measure) = match (&fingerprint, heard) {
+                    (Some(found), _) => (normalize(found.energy), Measure::Measured),
+                    (None, Some(level)) => (level, Measure::Heard),
+                    (None, None) => (0.5, Measure::Unmeasured),
+                };
                 Candidate {
                     affinity,
-                    energy: fingerprint
-                        .as_ref()
-                        .map_or(0.5, |found| normalize(found.energy)),
-                    measure: if fingerprint.is_some() {
-                        Measure::Measured
-                    } else {
-                        Measure::Unmeasured
-                    },
+                    energy,
+                    measure,
                     seed: seed_uris.contains(track.uri.as_str()),
                     artists: artist_keys(&track),
                     album: album_key(&track),
@@ -274,12 +279,14 @@ impl Pool {
 }
 
 /// Unmeasured tracks borrow the energy of measured tracks from the same album, then the same
-/// artist, then the same playlists.
+/// artist. Playlists are too mixed to borrow from: one quiet song would colour dozens.
 fn estimate_energy(candidates: &mut [Candidate]) {
     let mut albums: HashMap<String, Vec<f64>> = HashMap::new();
     let mut artists: HashMap<String, Vec<f64>> = HashMap::new();
-    let mut playlists: HashMap<usize, Vec<f64>> = HashMap::new();
-    for candidate in candidates.iter().filter(|c| c.measure == Measure::Measured) {
+    for candidate in candidates
+        .iter()
+        .filter(|c| matches!(c.measure, Measure::Measured | Measure::Heard))
+    {
         if let Some(album) = &candidate.album {
             albums
                 .entry(album.clone())
@@ -289,12 +296,6 @@ fn estimate_energy(candidates: &mut [Candidate]) {
         for artist in &candidate.artists {
             artists
                 .entry(artist.clone())
-                .or_default()
-                .push(candidate.energy);
-        }
-        for playlist in &candidate.playlists {
-            playlists
-                .entry(*playlist)
                 .or_default()
                 .push(candidate.energy);
         }
@@ -312,22 +313,35 @@ fn estimate_energy(candidates: &mut [Candidate]) {
             .flatten()
             .copied()
             .collect();
-        let listed: Vec<f64> = candidate
-            .playlists
-            .iter()
-            .filter_map(|playlist| playlists.get(playlist))
-            .flatten()
-            .copied()
-            .collect();
         let estimate = album
             .map(|values| mean(values))
-            .or_else(|| (!artist.is_empty()).then(|| mean(&artist)))
-            .or_else(|| (listed.len() >= 3).then(|| mean(&listed)));
+            .or_else(|| (!artist.is_empty()).then(|| mean(&artist)));
         if let Some(energy) = estimate {
             candidate.energy = energy;
             candidate.measure = Measure::Estimated;
         }
     }
+}
+
+fn percent(value: f64) -> u32 {
+    (value.clamp(0.0, 1.0) * 100.0).round() as u32
+}
+
+/// The radio engine's evidence in words a listener would use. Bookkeeping reasons, such as
+/// tie-breaks and penalties, are left out.
+fn plain(reason: &str) -> Option<String> {
+    let text = match reason {
+        r if r.starts_with("shared seed playlist") => "in a playlist with your starting song",
+        r if r.starts_with("genre overlap") => "a similar genre",
+        "cross-artist playlist affinity" => "shows up in playlists near your starting song",
+        "same artist" => "same artist as your starting song",
+        "same album" => "same album as your starting song",
+        "positive listening history" => "you usually play it through",
+        "saved track" => "in your liked songs",
+        "broader cache candidate" => "from your wider library",
+        _ => return None,
+    };
+    Some(text.to_string())
 }
 
 fn shares_playlist(a: &Candidate, b: &Candidate) -> bool {
@@ -689,24 +703,19 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
         if candidate.seed {
             reasons.push("seed".to_string());
         }
-        let engine_reasons = candidate
-            .reasons
-            .iter()
-            .filter(|reason| reason.as_str() != "seed");
-        let mut engine_reasons = engine_reasons.cloned();
+        let mut engine_reasons = candidate.reasons.iter().filter_map(|reason| plain(reason));
         if let Some(first) = engine_reasons.next() {
             reasons.push(first);
         }
+        let (energy, wanted) = (percent(candidate.energy), percent(target));
         reasons.push(match candidate.measure {
             Measure::Measured if (candidate.energy - target).abs() <= 0.08 => {
-                format!("energy {:.2} ≈ target {:.2}", candidate.energy, target)
+                format!("energy {energy}%, right on the arc")
             }
-            Measure::Measured => format!("energy {:.2}, target {:.2}", candidate.energy, target),
-            Measure::Estimated => format!(
-                "energy ~{:.2}, estimated from related tracks",
-                candidate.energy
-            ),
-            Measure::Unmeasured => "energy not measured yet".to_string(),
+            Measure::Measured => format!("energy {energy}%, the arc wants {wanted}%"),
+            Measure::Heard => format!("energy {energy}% from how loud it played last time"),
+            Measure::Estimated => format!("energy ~{energy}%, guessed from related songs"),
+            Measure::Unmeasured => "energy not learned yet".to_string(),
         });
         if let Some(reason) = scored.transition_reason {
             reasons.push(reason);
@@ -729,8 +738,9 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
         });
     }
     let count = |measure| slots.iter().filter(|slot| slot.measure == measure).count();
-    let (measured, estimated, unmeasured) = (
+    let (measured, heard, estimated, unmeasured) = (
         count(Measure::Measured),
+        count(Measure::Heard),
         count(Measure::Estimated),
         count(Measure::Unmeasured),
     );
@@ -738,13 +748,19 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
         0.0
     } else {
         let n = slots.len() as f64;
-        let quality = (measured as f64 + 0.6 * estimated as f64 + 0.3 * unmeasured as f64) / n;
+        let quality = (measured as f64
+            + 0.8 * heard as f64
+            + 0.6 * estimated as f64
+            + 0.3 * unmeasured as f64)
+            / n;
         let affinity = slots.iter().map(|slot| slot.affinity).sum::<f64>() / n;
         ((0.6 * quality + 0.4 * affinity) * 100.0).round() / 100.0
     };
     let mut notes = Vec::new();
     if !slots.is_empty() && unmeasured * 2 > slots.len() {
-        notes.push("most tracks are unmeasured; play more music to sharpen the curve".to_string());
+        notes.push(
+            "energy is still being learned; every song you play sharpens the shape".to_string(),
+        );
     }
     Draft {
         duration_ms: slots.iter().map(|slot| slot.track.duration as u64).sum(),
@@ -752,6 +768,7 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
         targets: targets.to_vec(),
         confidence,
         measured,
+        heard,
         estimated,
         unmeasured,
         pool_size: pool.len(),

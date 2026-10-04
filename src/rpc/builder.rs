@@ -47,6 +47,7 @@ fn draft(draft: &Draft, recipe: &Recipe, playlist_id: Option<&str>) -> Value {
         "targets": draft.targets.iter().copied().map(round).collect::<Vec<_>>(),
         "confidence": draft.confidence,
         "measured": draft.measured,
+        "heard": draft.heard,
         "estimated": draft.estimated,
         "unmeasured": draft.unmeasured,
         "pool_size": draft.pool_size,
@@ -174,8 +175,14 @@ pub(super) fn dispatch(rpc: &RpcService, method: &str, p: &Value) -> Result<Valu
             if tracks.is_empty() {
                 return Err(fail("empty_context", "This arc has no tracks"));
             }
-            rpc.queue.rpc_append_play_many(&tracks);
-            Ok(json!({"queued": tracks.len()}))
+            // Starting part way through plays the rest of the arc from that track.
+            let start = number(p, "slot", 0, usize::MAX)?;
+            let tracks = tracks
+                .get(start..)
+                .filter(|rest| !rest.is_empty())
+                .ok_or_else(|| invalid("slot is outside this arc"))?;
+            rpc.queue.rpc_append_play_many(tracks);
+            Ok(json!({"queued": tracks.len(), "slot": start}))
         }
         "builder.save" => save_arc(rpc, p),
         _ => Err(fail("unknown_method", format!("Unknown method {method}"))),

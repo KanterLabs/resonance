@@ -4,10 +4,11 @@ import { createSurface } from "../../workspace/surface.js";
 import { paletteForTheme, type ThemePalette } from "../../theme.js";
 import type { ParsedStatus } from "../../status.js";
 import { ArcsController } from "./controller.js";
-import { FOCUS_ORDER, adjustLength, adjustPoint, curveRows, dial, lengthLabel, markerRow, nextPreset, presetLabel, slotExplanation, slotRow, sparkline, summary, type Focus, type SeedRow } from "./model.js";
+import { COMPACT_LEGENDS, LEGENDS, adjustLength, adjustPoint, curveRows, lengthLabel, markerRow, mixLabel, nextPreset, presetLabel, slotExplanation, slotRow, summary, whyLine, type Legend, type SeedRow } from "./model.js";
 
-const HINT = "Tab focus · Enter build · p preset · ←→↑↓ shape · r reroll · k pin · x ban · i why · P play · s save · / add seed · + playing · - remove";
-const GUTTER = 8;
+const GUTTER = 7;
+/** How long an action's confirmation holds the bottom line before the selection's "why" returns. */
+const STATUS_HOLD_MS = 4000;
 
 function seedFromStatus(status: ParsedStatus | null): SeedRow | null {
   const playable = status?.playable;
@@ -16,40 +17,43 @@ function seedFromStatus(status: ParsedStatus | null): SeedRow | null {
 }
 
 export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
-  const surface = createSurface(ctx, "Arcs", HINT);
+  const surface = createSurface(ctx, "Arc Studio", LEGENDS.empty[0]);
   let colors = paletteForTheme(ctx.theme());
-  let focus: Focus = "curve";
+  let editing = false;
   let point = 0;
-  let explain = false;
+  let detail = false;
   let listKey = "";
   let disposed = false;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The arc row to land on when a swap or seed search returns to the arc. */
+  let returnTo: string | undefined;
 
-  const curveHeight = () => ctx.renderer.height >= 36 ? 5 : ctx.renderer.height >= 28 ? 3 : 2;
-  const chartWidth = () => Math.max(16, Math.min(72, Math.min(136, ctx.renderer.width) - 8 - GUTTER));
-  const panel = new BoxRenderable(ctx.renderer, { id: "arcs-panel", width: "100%", flexShrink: 0, minWidth: 0, flexDirection: "column" });
+  const legend2 = new TextRenderable(ctx.renderer, { id: "arcs-legend-2", content: LEGENDS.empty[1], height: 1, flexShrink: 0, truncate: true, wrapMode: "none", selectable: false, fg: colors.muted, bg: "transparent" });
+  surface.root.add(legend2, 2);
+  const curveHeight = () => ctx.renderer.height >= 36 ? 4 : ctx.renderer.height >= 28 ? 3 : 2;
+  const chartWidth = () => Math.max(16, Math.min(80, Math.min(136, ctx.renderer.width) - 8 - GUTTER));
+  const panel = new BoxRenderable(ctx.renderer, { id: "arcs-panel", width: "100%", flexShrink: 0, minWidth: 0, flexDirection: "column", marginTop: 1 });
   const texts: Array<{ node: TextRenderable; tone: keyof ThemePalette }> = [];
   const line = (id: string, tone: keyof ThemePalette = "text", bold = false) => {
     const node = new TextRenderable(ctx.renderer, { id: `arcs-${id}`, content: "", height: 1, flexShrink: 0, truncate: true, wrapMode: "none", selectable: false, fg: colors[tone], bg: "transparent", attributes: bold ? TextAttributes.BOLD : undefined });
     panel.add(node); texts.push({ node, tone }); return node;
   };
-  const seedsLine = line("seeds");
-  const curveLines = Array.from({ length: 5 }, (_, i) => line(`curve-${i}`, "accent"));
-  const markers = line("markers", "muted");
-  const landed = line("landed", "teal");
-  const dials = line("dials", "muted");
+  const fromLine = line("from", "text", true);
+  const controlsLine = line("controls", "muted");
+  const curveLines = Array.from({ length: 4 }, (_, i) => line(`curve-${i}`, "accent"));
+  const markers = line("markers", "accentBright");
   const totals = line("summary", "muted");
   surface.body.add(panel, 0);
 
   const controller = new ArcsController(ctx.api, () => render());
   controller.setCurrent(seedFromStatus(ctx.status()));
-  const unsubscribe = ctx.onStatus(status => { controller.setCurrent(seedFromStatus(status)); if (!controller.recipe.seeds.length) render(); });
+  const unsubscribe = ctx.onStatus(status => { controller.setCurrent(seedFromStatus(status)); render(); });
 
-  const focusTone = (section: Focus): keyof ThemePalette => focus === section ? "accentBright" : "muted";
-  function paintTones() {
-    for (const { node, tone } of texts) node.fg = colors[tone];
-    for (const node of curveLines) node.fg = focus === "curve" ? colors.accentBright : colors.accent;
-    markers.fg = colors[focusTone("curve")];
-    dials.fg = colors[focusTone("dials")];
+  function legend(): Legend {
+    if (controller.mode === "alternatives") return "swap";
+    if (controller.mode === "search") return "seed";
+    if (editing) return "edit";
+    return controller.draft?.slots.length ? "arc" : "empty";
   }
 
   function rows(): Row[] {
@@ -58,114 +62,138 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
     return controller.draft?.slots.map(slot => slotRow(slot)) ?? [];
   }
 
+  function selectedSlot() {
+    const row = surface.selected();
+    if (controller.mode === "alternatives") return row ? controller.alternatives[Number(row.id.slice(4))] : undefined;
+    const slot = row?.meta?.slot;
+    return controller.mode === "draft" && typeof slot === "number" ? controller.draft?.slots[slot] : undefined;
+  }
+
   function render() {
     if (disposed) return;
     const recipe = controller.recipe;
     const width = chartWidth();
     const height = curveHeight();
     const seeds = controller.seeds();
-    seedsLine.content = `Seeds   ${seeds.length ? seeds.map(seed => seed.title).join(" · ") : controller.current ? `${controller.current.title} (playing now)` : "none yet · press / to search or + for the playing song"}`;
+    const playing = controller.current;
+    fromLine.content = seeds.length
+      ? `From   ${seeds[0]!.title}${seeds[0]!.artists.length ? ` — ${seeds[0]!.artists.join(", ")}` : ""}${seeds.length > 1 ? `  (+${seeds.length - 1} more)` : ""}`
+      : playing ? `From   ${playing.title} — ${playing.artists.join(", ")}  (playing now)` : "From   nothing yet: play a song, or press / to choose one";
+    const roomy = Math.min(136, ctx.renderer.width) - 8 >= 96;
+    controlsLine.content = roomy
+      ? `Shape  ◀ ${presetLabel(controller.presets, recipe.preset)} ▶   Length − ${lengthLabel(recipe.length)} +   Mix ${mixLabel(recipe.discovery)}`
+      : `Shape  ◀ ${presetLabel(controller.presets, recipe.preset)} ▶  ${lengthLabel(recipe.length)}  mix ${mixLabel(recipe.discovery)}`;
     const chart = curveRows(recipe.curve, width, height);
-    curveLines.forEach((node, i) => { node.visible = i < height; node.content = i < height ? `${i === 0 ? "Energy" : i === height - 1 ? "  arc" : ""}`.padEnd(GUTTER) + chart[i] : ""; });
-    markers.content = " ".repeat(GUTTER) + markerRow(recipe.curve, width, point, focus === "curve") + `  ${presetLabel(controller.presets, recipe.preset)}`;
+    curveLines.forEach((node, i) => {
+      node.visible = i < height;
+      node.content = i < height ? `${i === 0 ? "high" : i === height - 1 ? "low" : ""}`.padEnd(GUTTER) + chart[i] : "";
+    });
+    markers.visible = editing;
+    markers.content = editing ? "".padEnd(GUTTER) + markerRow(recipe.curve, width, point, true) + `  point ${point + 1}/${recipe.curve.length} · energy ${Math.round(recipe.curve[point]!.energy * 100)}%` : "";
     const draft = controller.draft;
-    if (draft?.slots.length) {
-      const energies = Array.from({ length: width }, (_, c) => draft.slots[Math.min(draft.slots.length - 1, Math.floor(c * draft.slots.length / width))]!.energy);
-      landed.content = "Landed".padEnd(GUTTER) + sparkline(energies);
-    } else landed.content = "Landed".padEnd(GUTTER) + "build to see where each track lands";
-    dials.content = `Dials   Discovery ${dial(recipe.discovery)} ${recipe.discovery} · Length ${lengthLabel(recipe.length)} · Measured tracks ${controller.fingerprinted.toLocaleString("en-US")}`;
-    totals.content = draft ? summary(draft) : "No arc yet";
-    panel.height = height + 5;
-    paintTones();
+    totals.content = draft ? summary(draft) : controller.busy ? "Building…" : "";
+    panel.height = height + 3 + (editing ? 1 : 0);
+    for (const { node, tone } of texts) node.fg = colors[tone];
+    for (const node of curveLines) node.fg = editing ? colors.accentBright : colors.accent;
+
+    const [first, second] = (roomy ? LEGENDS : COMPACT_LEGENDS)[legend()];
+    surface.hint.content = first; legend2.content = second;
+    surface.hint.fg = colors.accentBright; legend2.fg = colors.muted;
 
     const next = rows();
     const key = `${controller.mode}|${next.map(row => `${row.id}:${row.title}:${row.detail}`).join("|")}`;
-    if (key !== listKey) { listKey = key; surface.setRows(next, undefined, activate); }
-    surface.heading.content = controller.busy ? "Arcs · working…" : controller.mode === "alternatives" ? `Arcs / replace slot ${controller.alternativeSlot + 1}` : controller.mode === "search" ? "Arcs / add a seed" : "Arcs";
-    const selected = selectedSlot();
-    if (explain && selected) surface.setMessage(slotExplanation(selected));
-    else surface.setMessage(controller.status, controller.error);
-    ctx.renderer.requestRender();
-  }
+    if (key !== listKey) {
+      listKey = key;
+      const prefer = controller.mode === "draft" ? returnTo : undefined;
+      surface.setRows(next, prefer, activate);
+      if (prefer) returnTo = undefined;
+    }
+    surface.heading.content = controller.busy ? "Arc Studio · working…" : controller.mode === "alternatives" ? `Arc Studio / swap track ${controller.alternativeSlot + 1}` : controller.mode === "search" ? "Arc Studio / add a starting song" : "Arc Studio";
 
-  function selectedSlot() {
-    const meta = surface.selected()?.meta;
-    if (controller.mode === "alternatives") { const index = Number(surface.selected()?.id.slice(4)); return controller.alternatives[index]; }
-    return controller.mode === "draft" && typeof meta?.slot === "number" ? controller.draft?.slots[meta.slot] : undefined;
+    const fresh = Date.now() - controller.statusAt < STATUS_HOLD_MS;
+    const selected = selectedSlot();
+    if (controller.error || (fresh && controller.status)) {
+      surface.setMessage(controller.status, controller.error);
+      clearTimeout(holdTimer);
+      if (!controller.error) holdTimer = setTimeout(render, STATUS_HOLD_MS);
+    } else if (selected) surface.setMessage(detail ? slotExplanation(selected) : whyLine(selected));
+    else surface.setMessage(controller.status);
+    ctx.renderer.requestRender();
   }
 
   function activate(row: Row) {
     if (controller.mode === "alternatives" && row.uri) void controller.choose(row.uri);
     else if (controller.mode === "search" && row.uri) controller.addSeed({ uri: row.uri, title: row.title.replace(/^\+ /, ""), artists: row.subtitle ? row.subtitle.split(/\s*[,·]\s*/) : [] });
-    else { explain = !explain; render(); }
+    else { const slot = row.meta?.slot; if (typeof slot === "number") void controller.play(slot); }
   }
 
-  function setFocus(next: Focus) { focus = next; render(); }
+  function editKey(name: string): boolean {
+    const recipe = controller.recipe;
+    if (name === "escape" || name === "return" || name === "enter" || name === "e") { editing = false; render(); return true; }
+    if (name === "left" || name === "right") { point = Math.max(0, Math.min(recipe.curve.length - 1, point + (name === "right" ? 1 : -1))); render(); return true; }
+    if (name === "up" || name === "down") { controller.edit({ curve: adjustPoint(recipe.curve, point, name === "up" ? 0.1 : -0.1), preset: null }); return true; }
+    return true; // Keep edit mode modal so stray letters do not change the arc.
+  }
 
   const handleKey = (key: ScreenKey) => {
     if (surface.editing()) return surface.handleKey(key);
-    if (key.ctrl || key.meta) return false;
-    const raw = key.name ?? key.sequence ?? "";
-    const name = raw.toLowerCase();
-    const recipe = controller.recipe;
-    if (name === "escape") {
-      if (controller.back()) return true;
-      if (explain) { explain = false; render(); return true; }
-      return false;
-    }
-    if (name === "tab") {
-      const step = key.shift ? -1 : 1;
-      setFocus(FOCUS_ORDER[(FOCUS_ORDER.indexOf(focus) + step + FOCUS_ORDER.length) % FOCUS_ORDER.length]!);
-      return true;
-    }
+    if (key.ctrl) return false;
+    const name = (key.name ?? key.sequence ?? "").toLowerCase();
+    const sequence = key.sequence ?? "";
+    if (editing) return editKey(name);
+    if (key.meta) return false;
     if (controller.mode !== "draft") {
+      if (name === "escape" || name === "backspace") { controller.back(); return true; }
       if (name === "return" || name === "enter") { const row = surface.selected(); if (row) activate(row); return true; }
-      return surface.handleKey(key);
+      const moved = surface.handleKey(key);
+      if (moved) render();
+      return moved;
     }
-    if (name === "return" || name === "enter") { void controller.build(); return true; }
-    if (name === "p") {
-      if (key.shift || raw === "P") { void controller.play(); return true; }
-      const preset = nextPreset(controller.presets, recipe.preset);
-      point = Math.min(point, preset.curve.length - 1);
-      controller.edit({ curve: preset.curve.map(p => ({ ...p })), preset: preset.id });
-      return true;
+    const recipe = controller.recipe;
+    const slot = selectedSlot();
+    switch (name) {
+      case "return": case "enter": { const row = surface.selected(); if (row) activate(row); else void controller.build(); return true; }
+      case "left": case "right": {
+        const preset = nextPreset(controller.presets, recipe.preset, name === "right" ? 1 : -1);
+        point = Math.min(point, preset.curve.length - 1);
+        controller.edit({ curve: preset.curve.map(p => ({ ...p })), preset: preset.id });
+        return true;
+      }
+      case "e": editing = true; point = Math.min(point, recipe.curve.length - 1); render(); return true;
+      case "-": case "_": controller.edit({ length: adjustLength(recipe.length, -1) }); return true;
+      case "+": case "=": controller.edit({ length: adjustLength(recipe.length, 1) }); return true;
+      case "[": case "]": controller.edit({ discovery: Math.max(0, Math.min(100, recipe.discovery + (name === "]" ? 10 : -10))) }); return true;
+      case "g": controller.remix(); return true;
+      case "c": void controller.useCurrent(); return true;
+      case "/": returnTo = surface.selected()?.id; surface.prompt("Search for a starting song", "", value => { if (value.trim()) void controller.search(value.trim()); }); return true;
+      case "backspace": case "delete": controller.removeSeed(); return true;
+      case "p": void controller.play(0); return true;
+      case "r": if (slot) { returnTo = `slot-${slot.slot}`; void controller.reroll(slot.slot); } return true;
+      case "k": if (slot) void controller.pin(slot.slot); return true;
+      case "x": if (slot) void controller.ban(slot.slot); return true;
+      case "i": detail = !detail; render(); return true;
+      case "s": {
+        if (!controller.draft?.slots.length) { surface.setMessage("Build an arc before saving it", true); return true; }
+        const title = controller.seeds()[0]?.title;
+        surface.prompt(controller.draft.playlist_id ? "Update the saved playlist (name)" : "Save as a private playlist named", title ? `${title} arc` : "Resonance arc", value => { if (value.trim()) void controller.save(value.trim()); });
+        return true;
+      }
+      default: {
+        if (sequence === "+" || sequence === "-") return handleKey({ ...key, name: sequence });
+        const moved = surface.handleKey(key);
+        if (moved) { controller.statusAt = 0; render(); }
+        return moved;
+      }
     }
-    if (name === "s") {
-      if (!controller.draft?.slots.length) { surface.setMessage("Build an arc before saving it", true); return true; }
-      const title = controller.seeds()[0]?.title;
-      surface.prompt(controller.draft.playlist_id ? "Update saved playlist" : "Save arc as playlist", title ? `${title} arc` : "Resonance arc", value => { if (value.trim()) void controller.save(value.trim()); });
-      return true;
-    }
-    if (name === "/") { surface.prompt("Search for a seed song", "", value => { if (value.trim()) void controller.search(value.trim()); }); return true; }
-    if (name === "+" || name === "=") { controller.addCurrentSeed(); return true; }
-    if (name === "-") { controller.removeSeed(); return true; }
-    if (name === "]" || name === "[") { controller.edit({ length: adjustLength(recipe.length, name === "]" ? 1 : -1) }); return true; }
-    if (focus === "curve") {
-      if (name === "left" || name === "right") { point = Math.max(0, Math.min(recipe.curve.length - 1, point + (name === "right" ? 1 : -1))); render(); return true; }
-      if (name === "up" || name === "down") { controller.edit({ curve: adjustPoint(recipe.curve, point, (name === "up" ? 1 : -1) * (key.shift ? 0.05 : 0.1)), preset: null }); return true; }
-    }
-    if (focus === "dials") {
-      if (name === "left" || name === "right") { controller.edit({ discovery: Math.max(0, Math.min(100, recipe.discovery + (name === "right" ? 10 : -10))) }); return true; }
-      if (name === "up" || name === "down") { controller.edit({ length: adjustLength(recipe.length, name === "up" ? 1 : -1) }); return true; }
-    }
-    if (focus === "draft") {
-      const slot = selectedSlot();
-      if (name === "r") { if (slot) void controller.reroll(slot.slot); return true; }
-      if (name === "k") { if (slot) void controller.pin(slot.slot); return true; }
-      if (name === "x") { if (slot) void controller.ban(slot.slot); return true; }
-      if (name === "i") { explain = !explain; render(); return true; }
-      if (surface.handleKey(key)) { if (explain) render(); return true; }
-    }
-    return false;
   };
 
   render();
   void controller.load(params.fromCurrent === true);
   return {
-    root: surface.root, title: "Arcs", handleKey,
-    editing: () => surface.editing(),
+    root: surface.root, title: "Arc Studio", handleKey,
+    editing: () => surface.editing() || editing,
     refresh: async () => { await controller.load(); },
     setTheme(theme) { colors = paletteForTheme(theme); surface.setTheme(theme); listKey = ""; render(); },
-    dispose() { if (disposed) return; disposed = true; unsubscribe(); controller.dispose(); surface.dispose(); },
+    dispose() { if (disposed) return; disposed = true; clearTimeout(holdTimer); unsubscribe(); controller.dispose(); surface.dispose(); },
   };
 };

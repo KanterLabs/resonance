@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_PRESETS, adjustLength, adjustPoint, curveRows, markerRow, nextPreset, normalizeRecipe, sampleCurve, slotRow, sparkline, summary, type ArcDraft, type ArcSlot } from "../src/screens/arcs/model.js";
+import { DEFAULT_PRESETS, adjustLength, adjustPoint, curveRows, markerRow, nextPreset, normalizeRecipe, sampleCurve, slotRow, sparkline, summary, whyLine, type ArcDraft, type ArcSlot } from "../src/screens/arcs/model.js";
 
 const slot: ArcSlot = { slot: 1, uri: "spotify:track:a", title: "Teardrop", artists: ["Massive Attack"], album: "Mezzanine", duration_ms: 330_000, target: 0.4, energy: 0.38, measure: "measured", tempo: 77, score: 0.8, affinity: 0.9, curve_fit: 0.95, transition: 0.7, penalty: 0, reasons: ["pinned", "shares 3 playlists with the seed", "energy 0.38 ≈ target 0.40"], pinned: true, seed: false };
 
@@ -39,12 +39,16 @@ test("recipes from the engine are normalized defensively", () => {
   expect(normalizeRecipe(null).preset).toBe("rise_and_fall");
 });
 
-test("slot rows explain the strongest reason and mark pins", () => {
+test("slot rows stay compact and the why line explains placement", () => {
   const row = slotRow(slot);
-  expect(row.title).toBe(" 2 ◆ Teardrop");
-  expect(row.detail).toContain("77 BPM");
-  expect(row.detail).toContain("shares 3 playlists");
-  expect(slotRow({ ...slot, measure: "estimated", tempo: null }).detail).toContain("0.38~ · —");
+  expect(row.title).toBe("02 ◆ Teardrop");
+  expect(row.detail).toBe("77 BPM · kept");
+  expect(slotRow({ ...slot, pinned: false, measure: "estimated", tempo: null }).detail).toBe("est.");
+  expect(slotRow({ ...slot, pinned: false, measure: "heard", tempo: null }).detail).toBe("heard");
+  expect(slotRow({ ...slot, pinned: false }).title).toBe("02 ▃ Teardrop");
+  expect(whyLine(slot)).toBe("Why Teardrop: kept in place · shares 3 playlists with the seed · energy 0.38 ≈ target 0.40");
   const draft: ArcDraft = { recipe: normalizeRecipe(undefined), slots: [slot], targets: [0.4], confidence: 0.72, measured: 1, estimated: 0, unmeasured: 0, pool_size: 40, duration_ms: 330_000, notes: [], playlist_id: null };
-  expect(summary(draft)).toBe("1 tracks · 6m · confidence 72% · 100% measured");
+  expect(summary(draft)).toBe("1 track · 6m · confidence 72% · energy known for 1 of 1");
+  expect(summary({ ...draft, slots: [{ ...slot, measure: "unmeasured" }, slot, { ...slot, measure: "unmeasured" }] })).toContain("energy known for 1 of 3: play the arc");
+  expect(slotRow({ ...slot, pinned: false, measure: "unmeasured" }).title).toBe("02 · Teardrop");
 });

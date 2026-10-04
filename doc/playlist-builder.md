@@ -63,28 +63,32 @@ line under the selected row.
 
 ### Controls
 
-**Tab** cycles focus between Curve, Dials, and Draft (**Shift+Tab** goes back).
+Arc Studio builds an arc from the playing song as soon as it opens, and every change rebuilds it.
+The track list always owns **↑/↓**, like every other screen. Two legend lines at the top show the
+keys for the current mode.
 
-| Focus | Key | Action |
-|---|---|---|
-| Any | `Enter` | Build, or rebuild while keeping pins and bans |
-| Any | `p` | Cycle curve preset |
-| Any | `P` | Load the draft into the queue and play it |
-| Any | `s` | Save to Spotify (prompts for a name; updates the arc's own playlist once saved) |
-| Any | `/` | Search for a seed song; `Enter` on a result adds it |
-| Any | `+` / `-` | Add the playing song as a seed / remove the last seed |
-| Any | `[` `]` | Shorten or lengthen the arc |
-| Curve | `←` `→` | Select a control point |
-| Curve | `↑` `↓` | Raise or lower the point's energy by 0.1 (`Shift` for 0.05) |
-| Dials | `←` `→` | Adjust discovery (0–100, steps of 10) |
-| Dials | `↑` `↓` | Adjust length |
-| Draft | `↑` `↓` | Select a slot |
-| Draft | `r` | Show five alternatives for the slot; `Enter` picks one, `Esc` keeps the current track |
-| Draft | `k` | Pin or unpin the track in its slot |
-| Draft | `x` | Ban the track for this arc and fill the slot again |
-| Draft | `i` | Show the full score breakdown for the slot |
+| Key | Action |
+|---|---|
+| `↑` `↓` | Pick a track; the bottom line says why it is there (`i` adds the full score) |
+| `Enter` | Play the arc from the selected track |
+| `p` | Play the whole arc from the start |
+| `←` `→` | Previous / next shape (preset) |
+| `-` `+` | Shorter / longer |
+| `[` `]` | More familiar / more new music |
+| `g` | Remix: same shape and songs, different picks (kept tracks stay) |
+| `r` | Swap the selected track: pick a replacement with `↑↓ Enter`, `Esc` keeps it |
+| `k` | Keep the selected track in place |
+| `x` | Remove the selected track; it will not come back in this arc |
+| `/` | Search for a starting song to add |
+| `c` | Start over from the song playing now |
+| `Backspace` | Drop the last starting song |
+| `e` | Edit the curve: `←→` choose a point, `↑↓` raise or lower it, `Enter`/`Esc` done |
+| `s` | Save as a private playlist (later saves update that same playlist) |
+| `Esc` | Back to Now Playing |
 
-Curve and dial edits rebuild automatically 400 ms after the last change.
+Rows mark each track's energy: a bar when it is known, `·` when it has not been learned yet, `◆`
+for kept tracks and `✦` for starting songs. Until most energies are known the summary says so:
+playing an arc is how it learns.
 
 Presets: **Rise & Fall** (default), **Steady Focus**, **Build to Peak**, **Wind Down**, **Run**
 (high, flat, with a short warm-up).
@@ -359,7 +363,14 @@ Differences from the plan above, recorded when v1 landed:
   Seeds are always in their own arc and are placed where their energy fits the curve.
 - **Sampling:** a background thread in the engine reads the audio tap ten times a second, so
   fingerprints are learned under OpenTUI, `--headless`, and the legacy UI alike.
-- **Deferred to a later release:** the `arcs-debug` CLI and replay snapshots, the
+- **Heard energy:** tracks without a fingerprint use the loudness the waveform cache recorded the
+  last time they played, stretched from its 0.4–0.95 band onto 0–1. Estimates borrow only from the
+  same album or artist; playlists were too mixed and spread one quiet song across dozens.
+- **Plain reasons:** engine evidence is reworded ("in a playlist with your starting song", "you
+  usually play it through") and bookkeeping reasons such as tie-breaks are dropped.
+- **`resonance arcs-debug`** prints an arc built from the cache without logging in:
+  `--seed URI` (repeatable), `--preset`, `--tracks`, `--discovery`, `--rng-seed`.
+- **Deferred to a later release:** replay snapshots, the
   `arcs_recipe_in_description` setting (it is only useful with rebuild-from-description), and a
   Settings diagnostics panel. Coverage is shown on the Arcs screen and via `builder.coverage`.
 - **Offline demo:** `DemoApi` builds illustrative arcs from its fixtures; saving is unavailable.

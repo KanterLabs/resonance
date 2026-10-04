@@ -34,6 +34,9 @@ const SAVE_EVERY: Duration = Duration::from_secs(60);
 /// A bucket below this counts as never having been heard, and is drawn as unknown
 /// rather than as silence.
 const UNHEARD: f32 = f32::EPSILON;
+/// Buckets that must have been heard before a track's loudness is worth reporting: about a
+/// sixth of the track.
+const MIN_HEARD_FOR_LOUDNESS: usize = 40;
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
@@ -128,6 +131,21 @@ impl WaveformStore {
             })
             .collect();
         Some(shape)
+    }
+
+    /// How loud a track is on average across the parts heard, once enough of it has been
+    /// heard to say. Arcs use this as an energy estimate for tracks not yet fingerprinted.
+    pub fn loudness(&self, id: &str) -> Option<f32> {
+        let tracks = self.tracks.read().unwrap();
+        let heard: Vec<f32> = tracks
+            .get(id)?
+            .levels
+            .iter()
+            .copied()
+            .filter(|level| *level > UNHEARD)
+            .collect();
+        (heard.len() >= MIN_HEARD_FOR_LOUDNESS)
+            .then(|| heard.iter().sum::<f32>() / heard.len() as f32)
     }
 
     /// Write the shapes out, but no more often than `SAVE_EVERY`.

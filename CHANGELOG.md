@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or choose a preset), and Resonance fills each slot from the local cache with an explanation,
   then plays it or saves it as a private Spotify playlist. Slots can be rerolled, pinned, or
   banned. See [the Arcs guide](doc/playlist-builder.md).
+- Arc Studio builds from the playing song as soon as it opens, rebuilds on every change, and keeps
+  ↑/↓ on the track list: ←/→ change shape, −/+ length, [/] familiar↔new, g remixes, e edits the
+  curve, and Enter plays from the selected track. Each track says why it is there in plain words.
+- `resonance arcs-debug` prints an arc built from cached music without logging in.
 - Learn each track's energy, tempo, brightness, and how it starts and ends by sampling the audio
   tap during normal playback. Only summary numbers are stored (`fingerprints.json` in the cache
   directory), never audio.

@@ -127,6 +127,10 @@ impl Preset {
         }
     }
 
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|preset| preset.id() == id)
+    }
+
     pub fn curve(self) -> Vec<CurvePoint> {
         let levels: [f64; 8] = match self {
             Self::RiseAndFall => [0.2, 0.35, 0.55, 0.75, 0.85, 0.7, 0.45, 0.25],

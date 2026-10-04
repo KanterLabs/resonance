@@ -94,6 +94,7 @@ fn pool_for(fixture: &Fixture) -> Pool {
         recent: &[],
         fingerprints: &fixture.fingerprints,
         library_energies: &energies,
+        heard: &HashMap::new(),
     })
 }
 
@@ -218,7 +219,12 @@ fn an_unmeasured_library_still_builds_with_low_confidence() {
             .all(|slot| slot.measure == Measure::Unmeasured)
     );
     assert!(draft.confidence < 0.5);
-    assert!(draft.notes.iter().any(|note| note.contains("unmeasured")));
+    assert!(
+        draft
+            .notes
+            .iter()
+            .any(|note| note.contains("still being learned"))
+    );
 }
 
 #[test]
@@ -352,4 +358,42 @@ fn recipes_are_brought_into_range() {
         ..Recipe::default()
     };
     assert!(broken.normalize().is_err());
+}
+
+#[test]
+fn heard_loudness_counts_as_energy_and_reasons_are_plain() {
+    let mut fixture = fixture(false);
+    let loud = fixture.catalog.tracks[9].uri.clone();
+    let energies: Vec<f32> = Vec::new();
+    let heard = HashMap::from([(loud.clone(), 0.9)]);
+    let pool = Pool::build(&PoolInput {
+        catalog: &fixture.catalog,
+        seeds: std::slice::from_ref(&fixture.seed),
+        discovery: 30,
+        feedback: &HashMap::new(),
+        recent: &[],
+        fingerprints: &fixture.fingerprints,
+        library_energies: &energies,
+        heard: &heard,
+    });
+    let candidate = pool.get(&loud).expect("in pool");
+    assert_eq!(candidate.measure, Measure::Heard);
+    assert!((candidate.energy - 0.9).abs() < 1e-9);
+    // Songs on the same album borrow the heard energy rather than staying unknown.
+    let sibling = &fixture.catalog.tracks[8].uri;
+    assert_eq!(pool.get(sibling).unwrap().measure, Measure::Estimated);
+    fixture.fingerprints.clear();
+    let draft = solve(&pool, &recipe(&fixture));
+    for slot in &draft.slots {
+        for reason in &slot.reasons {
+            assert!(
+                !reason.contains("normalized") && !reason.contains("tie-break"),
+                "{reason}"
+            );
+        }
+    }
+    assert_eq!(
+        draft.heard + draft.estimated + draft.measured + draft.unmeasured,
+        draft.slots.len()
+    );
 }

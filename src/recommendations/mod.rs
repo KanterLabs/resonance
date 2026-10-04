@@ -468,12 +468,8 @@ fn cached<T: serde::de::DeserializeOwned>(name: &str) -> Result<Option<T>, Strin
 }
 
 /// A read-only offline snapshot. No Config creation, login, or lazy API loading.
-pub fn offline_report(
-    seed: Option<String>,
-    rng_seed: u64,
-    limit: usize,
-    discovery: u8,
-) -> Result<String, String> {
+/// Every cached track, playlist membership and genre, read without logging in.
+pub fn offline_catalog() -> Result<Catalog, String> {
     let tracks = cached::<Vec<Track>>("tracks.db")?.unwrap_or_default();
     let saved = tracks.iter().map(|track| track.uri.clone()).collect();
     let mut catalog = Catalog {
@@ -546,6 +542,16 @@ pub fn offline_report(
     catalog.tracks.extend(extra);
     catalog.artist_genres = genres;
     catalog.tracks.sort_by(|a, b| a.uri.cmp(&b.uri));
+    Ok(catalog)
+}
+
+pub fn offline_report(
+    seed: Option<String>,
+    rng_seed: u64,
+    limit: usize,
+    discovery: u8,
+) -> Result<String, String> {
+    let mut catalog = offline_catalog()?;
     let track = match seed {
         Some(seed) => catalog
             .tracks
