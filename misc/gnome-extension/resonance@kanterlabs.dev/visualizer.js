@@ -81,6 +81,16 @@ export const Visualizer = GObject.registerClass({
         this._playing = playing;
     }
 
+    // What Resonance knows of the song's shape, for the Ridges skyline.
+    setSongMap(map) {
+        this._ridges.setSongMap(map);
+    }
+
+    // How far through the track playback is, 0 to 1, or null when unknown.
+    setProgress(progress) {
+        this._ridges.setProgress(progress);
+    }
+
     // One frame of Resonance's audio feed.
     feed(audio) {
         this._live = audio.live;
@@ -93,7 +103,7 @@ export const Visualizer = GObject.registerClass({
         this._ridges.setTempo(audio.live ? audio.tempo : null);
         if (this._beats !== null && audio.beats > this._beats) {
             this._flash = 1;
-            this._ridges.beat(Math.min(1, Math.max(0.5, audio.pulse * 1.4)));
+            this._ridges.beat(Math.min(1, Math.max(0.5, audio.pulse * 1.4)), audio.beats);
         }
         this._beats = audio.beats;
     }

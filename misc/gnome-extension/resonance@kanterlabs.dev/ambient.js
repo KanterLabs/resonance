@@ -176,6 +176,14 @@ export class Ambient {
         this._visualizer.feed(audio);
     }
 
+    setSongMap(map) {
+        this._visualizer.setSongMap(map);
+    }
+
+    setProgress(progress) {
+        this._visualizer.setProgress(progress);
+    }
+
     setArt(path, palette) {
         const image = path ? `background-image: url("file://${path}");` : '';
         this._cover.style = image;

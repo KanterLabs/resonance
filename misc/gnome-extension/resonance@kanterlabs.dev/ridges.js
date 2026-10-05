@@ -16,6 +16,9 @@ const STARS = 90;
 // The sun's halo is drawn once into an image this size and scaled up, since a
 // radial gradient computed per pixel is slow on a full-screen canvas.
 const HALO_SIZE = 128;
+// How much each kind of beat lights its ridge: an ordinary beat, the first
+// beat of a bar, of a four-bar phrase, and of a sixteen-bar section.
+const ACCENTS = [0.45, 0.8, 1, 1];
 
 // Bass is the first few bands and treble the top quarter, out of the 64.
 const BASS = [0, 8];
@@ -53,13 +56,22 @@ function makeStars() {
 // horizon. Pausing counts as the quietest breakdown, so resuming is a drop.
 export class Ridges {
     constructor() {
-        // Each ridge is {values, palette, beat}: the spectrum when it was taken,
-        // the colours of the song playing then, and how hard a beat hit during it.
+        // Each ridge is {values, palette, beat, accent}: the spectrum when it was
+        // taken, the colours of the song playing then, how hard a beat hit during
+        // it, and which kind of beat that was (see ACCENTS).
         this._rows = [];
         this._clock = 0;
         this._interval = INTERVAL;
         this._beat = 0;
+        this._accent = 0;
+        // Which of every four beats is the downbeat, learned from which hits
+        // hardest, and the downbeat that phrases are counted from.
+        this._barSlots = [0, 0, 0, 0];
+        this._phraseOrigin = null;
         this._tempo = null;
+        // What is known of the song's shape, and how far through it we are.
+        this._map = null;
+        this._progress = null;
         this._time = 0;
         // Starting calm means opening the popup is itself a drop.
         this._calm = 1;
@@ -81,10 +93,46 @@ export class Ridges {
         this._tempo = tempo || null;
     }
 
-    // A beat landed, `strength` from 0.5 to 1.
-    beat(strength) {
+    // The song's map from Resonance: {uri, level, bass, mid, treble}, each lane
+    // an array of 0 to 1 with nulls where unheard.
+    setSongMap(map) {
+        if (map?.uri !== this._map?.uri)
+            this._phraseOrigin = null;
+        this._map = map?.level ? map : null;
+        if (this._map) {
+            // The song's own quietest and loudest stretches, so every skyline
+            // uses its full height whatever the mastering.
+            const heard = this._map.level.filter(value => value !== null);
+            this._mapLow = heard.length ? Math.min(...heard) : 0;
+            this._mapHigh = heard.length ? Math.max(...heard) : 1;
+        }
+    }
+
+    // How far through the track playback is, 0 to 1, or null when unknown.
+    setProgress(progress) {
+        this._progress = progress;
+    }
+
+    // Beat number `count` landed, `strength` from 0.5 to 1.
+    beat(strength, count) {
+        const slot = count % 4;
+        for (let i = 0; i < 4; i++)
+            this._barSlots[i] *= 0.92;
+        // Downbeats tend to carry the kick, so bass at the moment counts too.
+        this._barSlots[slot] += strength + this._fast;
+        const downbeat = this._barSlots.indexOf(Math.max(...this._barSlots));
+        let accent = 0;
+        if (slot === downbeat) {
+            // Phrases count from the song's first downbeat, and again from each
+            // drop, which is where sections tend to begin.
+            if (this._phraseOrigin === null || (count - this._phraseOrigin) % 4 !== 0)
+                this._phraseOrigin = count;
+            const bars = (count - this._phraseOrigin) / 4;
+            accent = bars % 16 === 0 ? 3 : bars % 4 === 0 ? 2 : 1;
+        }
         // Remembered until the next ridge is taken, which carries it away.
-        this._beat = Math.max(this._beat, strength);
+        this._beat = Math.max(this._beat, strength * ACCENTS[accent]);
+        this._accent = Math.max(this._accent, accent);
         if (strength > 0.85 && this._sinceMeteor > 5 && Math.random() < 0.4)
             this._launchMeteor();
     }
@@ -98,8 +146,14 @@ export class Ridges {
         this._clock += dt;
         while (this._clock >= this._interval) {
             this._clock -= this._interval;
-            this._rows.unshift({values: this._values(view.shown), palette: view.palette, beat: this._beat});
+            this._rows.unshift({
+                values: this._values(view.shown),
+                palette: view.palette,
+                beat: this._beat,
+                accent: this._accent,
+            });
             this._beat = 0;
+            this._accent = 0;
             this._rows.length = Math.min(this._rows.length, ROWS);
             // Changed only as a ridge is taken, so the scroll never jumps.
             this._interval = this._nextInterval();
@@ -135,6 +189,7 @@ export class Ridges {
         if (view.live && this._calmMemory > 0.5 && this._fast > this._slow * 1.15 + 0.06) {
             this._surge = 1;
             this._calmMemory = 0;
+            this._phraseOrigin = null;
         }
         this._surge *= Math.exp(-dt * 1.4);
     }
@@ -175,6 +230,7 @@ export class Ridges {
 
         this._drawSky(cr, w, horizon, view, glow, unit);
         this._drawSun(cr, w, horizon, view, glow);
+        this._drawSkyline(cr, w, horizon, view, glow, unit);
 
         // The plain the ridges stand on, hazing into the horizon, so the
         // furthest ones sit on ground that runs out to it rather than floating.
@@ -266,7 +322,10 @@ export class Ridges {
 
         const radius = horizon * 0.62 * (1 + 0.1 * this._fast + 0.05 * view.flash);
         const cx = w / 2;
-        const cy = horizon + radius * 0.12;
+        // The sun sets with the song: high at the start, gone by the end,
+        // lingering near the top for most of it.
+        const setting = this._progress === null ? 0.5 : this._progress ** 1.6;
+        const cy = horizon + radius * (-0.85 + 1.9 * setting);
 
         const reach = radius * 2.4;
         cr.save();
@@ -313,6 +372,71 @@ export class Ridges {
         cr.restore();
     }
 
+    // The whole song as a mountain range on the horizon, its height the song's
+    // loudness from its own quietest to loudest, with a light where playback is.
+    // The part already played stands out; the rest waits, dimmer. Stretches not
+    // heard yet lie flat, so a first listen draws the range in as it goes.
+    _drawSkyline(cr, w, horizon, view, glow, unit) {
+        const map = this._map;
+        if (!map)
+            return;
+        const left = w * 0.06;
+        const width = w - left * 2;
+        const tall = horizon * 0.34;
+        const range = Math.max(0.05, this._mapHigh - this._mapLow);
+        const count = map.level.length;
+        const points = map.level.map((value, i) => {
+            const height = value === null ? 0.02 : 0.08 + 0.92 * ((value - this._mapLow) / range) ** 1.3;
+            return [left + (i + 0.5) / count * width, horizon - height * tall];
+        });
+        const outline = () => {
+            cr.moveTo(left, horizon);
+            smoothLine(cr, points, false);
+            cr.lineTo(left + width, horizon);
+        };
+        const at = this._progress === null ? null : left + this._progress * width;
+
+        // Played and still to come, drawn alike but lit differently.
+        for (const played of [true, false]) {
+            cr.save();
+            if (at !== null) {
+                cr.rectangle(played ? 0 : at, 0, played ? at : w - at, horizon + 1);
+                cr.clip();
+            } else if (!played) {
+                cr.restore();
+                continue;
+            }
+            outline();
+            cr.closePath();
+            // Played ground is lit by the sun; what is to come stands in silhouette.
+            if (played)
+                cr.setSourceRGBA(...mix(glow, [1, 1, 1], 0.2), 0.5);
+            else
+                cr.setSourceRGBA(...mix(view.palette.dark, glow, 0.15), 0.9);
+            cr.fill();
+            outline();
+            cr.setLineWidth(1.2 * unit);
+            cr.setSourceRGBA(...mix(glow, [1, 1, 1], played ? 0.45 : 0.1), played ? 0.85 : 0.35);
+            cr.stroke();
+            cr.restore();
+        }
+
+        if (at === null)
+            return;
+        // The skyline's height where playback is, for the marker to stand on.
+        const index = Math.min(count - 1, Math.floor(this._progress * count));
+        const peak = points[index][1];
+        cr.setSourceRGBA(1, 1, 1, 0.5);
+        cr.rectangle(at - 0.5 * unit, peak, unit, horizon - peak);
+        cr.fill();
+        cr.setSourceRGBA(...mix(glow, [1, 1, 1], 0.5), 0.35 + 0.4 * view.flash);
+        cr.arc(at, peak, (4 + 3 * view.flash) * unit, 0, 2 * Math.PI);
+        cr.fill();
+        cr.setSourceRGBA(1, 1, 1, 1);
+        cr.arc(at, peak, 2 * unit, 0, 2 * Math.PI);
+        cr.fill();
+    }
+
     // The top half of a glow round the sun, at full strength in `color`.
     _haloFor(color) {
         if (this._halo && this._haloColor === color)
@@ -339,7 +463,7 @@ export class Ridges {
         // The live one at the front follows the music every frame; each one
         // taken starts out identical to it and then peels away behind.
         const phase = this._clock / this._interval;
-        const live = {values: this._values(view.shown), palette: view.palette, beat: view.flash};
+        const live = {values: this._values(view.shown), palette: view.palette, beat: view.flash, accent: 1};
         const ridges = [live, ...this._rows];
         for (let r = ridges.length - 1; r >= 0; r--) {
             const ridge = ridges[r];
@@ -369,17 +493,23 @@ export class Ridges {
             cr.fill();
 
             const hue = mix(ridge.palette.primary, ridge.palette.secondary, fog);
-            const color = mix(hue, [1, 1, 1], ridge.beat * 0.55);
+            // Bars, phrases and sections stand out progressively more, so the
+            // song's structure reads in the stripes.
+            const accent = ridge.accent ?? 0;
+            const color = mix(hue, [1, 1, 1], ridge.beat * [0.25, 0.55, 0.75, 0.85][accent]);
             // Fog thickens in a breakdown, swallowing the far ridges first.
             const haze = 1 - 0.5 * this._calm * fog;
             const alpha = Math.min(1, 0.95 - fog * 0.6 + ridge.beat * 0.3) * fade * haze;
-            if (ridge.beat > 0.05) {
-                // A beat ridge glows, so the rhythm marches off as bright stripes.
+            if (ridge.beat > 0.05 && accent > 0) {
+                // A downbeat ridge glows, so the rhythm marches off as bright stripes.
+                const reach = [0, 1, 1.3, 1.6][accent];
                 cr.setOperator(Cairo.Operator.ADD);
                 smoothLine(cr, points);
-                cr.setLineWidth((4 + 8 * ridge.beat) * scale * unit);
+                cr.setLineWidth((4 + 8 * ridge.beat) * reach * scale * unit);
                 // In the song's colour: glow tinted white reads as grey haze.
-                cr.setSourceRGBA(...hue, 0.22 * ridge.beat * fade);
+                // Sections glow in the second colour, to mark them apart.
+                cr.setSourceRGBA(...(accent === 3 ? ridge.palette.secondary : hue),
+                    0.2 * ridge.beat * fade * (accent >= 2 ? 1.25 : 1));
                 cr.stroke();
                 cr.setOperator(Cairo.Operator.OVER);
             }

@@ -23,6 +23,9 @@ const VISUALIZER_HEIGHT = 280;
 // The cover in the middle of the orbit, a little inside the ring.
 const DISC_SIZE = Math.round(VISUALIZER_HEIGHT * 0.48) - 14;
 const UP_NEXT_ROWS = 3;
+// How often the song map is asked for again while a view is open, so a first
+// listen draws the skyline in as it goes.
+const MAP_SECONDS = 3;
 const ORIGINS = {radio: 'Radio', explicit: 'Queued'};
 
 function formatTime(ms) {
@@ -244,9 +247,30 @@ export class Popup {
         if (this._isOpen || this._ambient.isOpen) {
             this._client.setAudio(AUDIO_FEED);
             this._client.start();
+            this._mapClock ||= GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, MAP_SECONDS, () => {
+                this._fetchMap();
+                return GLib.SOURCE_CONTINUE;
+            });
         } else {
             this._client.stop();
+            if (this._mapClock) {
+                GLib.source_remove(this._mapClock);
+                this._mapClock = 0;
+            }
         }
+    }
+
+    // Ask Resonance what it knows of the playing song's shape. Builds without
+    // song maps refuse, and Ridges simply goes without a skyline.
+    _fetchMap() {
+        if (!this._client.connected || !this._status?.playable)
+            return;
+        this._client.request('song.map').then(map => {
+            if (map.uri !== this._status?.playable?.uri)
+                return;
+            this._visualizer.setSongMap(map);
+            this._ambient.setSongMap(map);
+        }).catch(() => {});
     }
 
     open() {
@@ -316,11 +340,15 @@ export class Popup {
 
     destroy() {
         this._releaseGrab();
-        this._ambient.destroy();
+        // Everything that can call back into the views goes first: stopping the
+        // client reports the disconnect to them, so they must still be there.
         this._client.stop();
         this._stopClock();
         this._art.destroy();
+        if (this._mapClock)
+            GLib.source_remove(this._mapClock);
         this._settings.disconnectObject(this);
+        this._ambient.destroy();
         this._backdrop.destroy();
     }
 
@@ -422,8 +450,16 @@ export class Popup {
     }
 
     _onStatus(status) {
+        const track = status?.playable?.uri ?? null;
         this._status = status;
         this._statusAt = GLib.get_monotonic_time();
+        // A new song: forget the old one's skyline straight away and ask for this one's.
+        if (track !== this._mapTrack) {
+            this._mapTrack = track;
+            this._visualizer.setSongMap(null);
+            this._ambient.setSongMap(null);
+            this._fetchMap();
+        }
         this._syncCover();
         this._ambient.setStatus(status);
         this._ambient.setPlaying(this._playing());
@@ -432,9 +468,14 @@ export class Popup {
     }
 
     _onAudio(audio) {
+        const duration = this._status?.playable?.duration;
+        const progress = duration ? this._position() / duration : null;
+        this._visualizer.setProgress(progress);
         this._visualizer.feed(audio);
-        if (this._ambient.isOpen)
+        if (this._ambient.isOpen) {
+            this._ambient.setProgress(progress);
             this._ambient.feed(audio);
+        }
         if (audio.tempo) {
             this._tempo.show();
             this._tempoLabel.text = `${Math.round(audio.tempo)} BPM`;
