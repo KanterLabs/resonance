@@ -521,6 +521,18 @@ between frames means one landed. `tempo` is in beats per minute, or null until
 enough beats have been heard. Send `audio.unsubscribe` to stop the feed. Other
 connections are unaffected. `misc/gnome-extension` uses this feed for its popup.
 
+Resonance also learns the shape of each song as it plays: the track is cut into 200
+equal stretches, each remembering its loudness, bass, middle and treble, averaged over
+every listen and kept in `song_maps.json` in the cache directory. `song.map` returns
+it for the playing track, or for `params.uri`:
+
+```
+{"uri":"spotify:track:...","duration_ms":257775,"buckets":200,"heard":0.62,"level":[0.71,0.74,null,...],"bass":[...],"mid":[...],"treble":[...]}
+```
+
+Each lane holds one value from 0 to 1 per stretch, or `null` for stretches not heard
+yet. `heard` is the share that has been. The answer includes the listen in progress.
+
 ## Configuration
 Configuration is saved to the `config.toml` file in the platform's standard configuration directory.
 Run `resonance info` to show the location of this directory on your platform. To reload the

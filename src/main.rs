@@ -31,6 +31,7 @@ mod recommendations;
 mod search_cache;
 mod serialization;
 mod sharing;
+mod song_map;
 mod spotify;
 mod spotify_api;
 mod spotify_url;

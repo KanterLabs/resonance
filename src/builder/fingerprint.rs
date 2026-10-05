@@ -415,6 +415,8 @@ pub fn start(spotify: crate::spotify::Spotify, queue: Arc<crate::queue::Queue>) 
         .name("arc-fingerprints".into())
         .spawn(move || {
             let store = shared();
+            // Song maps learn from the same readings.
+            let maps = crate::song_map::shared();
             loop {
                 std::thread::sleep(SAMPLE_EVERY);
                 let track = queue
@@ -434,6 +436,9 @@ pub fn start(spotify: crate::spotify::Spotify, queue: Arc<crate::queue::Queue>) 
                 });
                 if store.observe(track.as_ref(), sample.as_ref()) {
                     store.save();
+                }
+                if maps.observe(track.as_ref(), sample.as_ref()) {
+                    maps.save();
                 }
             }
         });

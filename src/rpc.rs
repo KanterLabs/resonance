@@ -27,6 +27,7 @@ const METHODS: &[&str] = &[
     "player.artwork",
     "audio.subscribe",
     "audio.unsubscribe",
+    "song.map",
     "queue.list",
     "queue.action",
     "library.list",
@@ -828,6 +829,7 @@ impl RpcService {
                 Ok(json!({"subscribed":true,"fps":fps,"bands":bands,"waveform":waveform}))
             }
             "audio.unsubscribe" => Ok(json!({"subscribed":false})),
+            "song.map" => self.song_map(p),
             "library.action" => self.library_action(p),
             "playlist.action" => self.playlist_action(p),
             "radio.status" => {
@@ -1421,6 +1423,39 @@ impl RpcService {
             _ => return Err(invalid("unknown player action")),
         }
         Ok(json!({"accepted":true}))
+    }
+    /// The shape of a track as far as it has been heard, the playing one by default.
+    fn song_map(&self, p: &Value) -> Result<Value> {
+        let track = match p.get("uri").and_then(Value::as_str) {
+            Some(uri) => self.resolve(uri)?.track(),
+            None => self
+                .queue
+                .get_current()
+                .and_then(|playable| playable.track()),
+        }
+        .ok_or_else(|| fail("not_found", "No track to map"))?;
+        let map = crate::song_map::shared().get(&track.uri, track.duration);
+        let lane = |index: usize| -> Vec<Value> {
+            map.buckets
+                .iter()
+                .map(|bucket| match bucket {
+                    Some(values) => {
+                        json!((f64::from(values[index]) / 255.0 * 1000.0).round() / 1000.0)
+                    }
+                    None => Value::Null,
+                })
+                .collect()
+        };
+        Ok(json!({
+            "uri": track.uri,
+            "duration_ms": map.duration_ms,
+            "buckets": crate::song_map::BUCKETS,
+            "heard": map.heard(),
+            "level": lane(0),
+            "bass": lane(1),
+            "mid": lane(2),
+            "treble": lane(3),
+        }))
     }
     fn player_artwork(&self, p: &Value) -> Result<Value> {
         let width = dimension(p, "width", artwork::DEFAULT_WIDTH, artwork::MAX_WIDTH)?;
@@ -2326,6 +2361,34 @@ mod tests {
         assert_eq!(
             service.dispatch("audio.unsubscribe", &json!({})).unwrap(),
             json!({"subscribed":false})
+        );
+    }
+
+    #[test]
+    fn song_map_needs_a_track_and_starts_out_unheard() {
+        let service = service();
+        let error = service.dispatch("song.map", &json!({})).unwrap_err();
+        assert_eq!(error.code, "not_found");
+
+        let track =
+            crate::builder::test_track("spotify:track:SongMapRpc", "artist", "album", 180_000);
+        service
+            .queue
+            .rpc_append_play_many(&[crate::model::playable::Playable::Track(track)]);
+        let result = service.dispatch("song.map", &json!({})).unwrap();
+        assert_eq!(result["uri"], "spotify:track:SongMapRpc");
+        assert_eq!(result["duration_ms"], 180_000);
+        assert_eq!(result["buckets"], crate::song_map::BUCKETS);
+        assert_eq!(
+            result["level"].as_array().unwrap().len(),
+            crate::song_map::BUCKETS
+        );
+        assert!(
+            result["level"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(Value::is_null)
         );
     }
 }

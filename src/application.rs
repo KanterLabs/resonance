@@ -445,6 +445,7 @@ impl Application {
         self.queue.finish_listening();
         crate::recommendations::history::shared().flush();
         crate::builder::fingerprint::flush();
+        crate::song_map::flush();
         Ok(())
     }
 }
