@@ -1,6 +1,6 @@
 {
   "name": "Resonance",
-  "description": "What Resonance is playing, with live visualizers drawn from its audio feed. Press Super+M to open and close.",
+  "description": "What Resonance is playing, with live visualizers drawn from its audio feed. Press Super+M to open and close, Super+Shift+M for full screen.",
   "uuid": "resonance@kanterlabs.dev",
   "settings-schema": "org.gnome.shell.extensions.resonance",
   "shell-version": [

@@ -13,6 +13,7 @@ const BUILD = import.meta.url.match(/[?&]v=(\d+)/)?.[1] ?? '0';
 const {ResonanceClient} = await import(`./client.js?v=${BUILD}`);
 const {ArtCache, DEFAULT_PALETTE} = await import(`./palette.js?v=${BUILD}`);
 const {Visualizer, MODES, MODE_LABELS, AUDIO_FEED} = await import(`./visualizer.js?v=${BUILD}`);
+const {Ambient} = await import(`./ambient.js?v=${BUILD}`);
 
 const POPUP_WIDTH = 600;
 const POPUP_PADDING = 18;
@@ -59,11 +60,18 @@ export class Popup {
             onAudio: audio => this._onAudio(audio),
             onConnected: connected => {
                 // What was playing is only known while Resonance is there to say.
-                if (!connected)
+                if (!connected) {
                     this._status = null;
+                    this._ambient.setStatus(null);
+                }
                 if (this._isOpen)
                     this._render();
             },
+        });
+        this._ambient = new Ambient({
+            onAction: action => this._action(action),
+            onMode: mode => this._setMode(mode),
+            onClosed: () => this._syncClient(),
         });
 
         this._buildUi();
@@ -218,6 +226,29 @@ export class Popup {
             this.open();
     }
 
+    toggleAmbient() {
+        if (this._ambient.isOpen) {
+            this._ambient.close();
+            return;
+        }
+        this.close();
+        this._ambient.setStatus(this._status);
+        this._ambient.setPlaying(this._playing());
+        this._ambient.open();
+        this._syncClient();
+    }
+
+    // Resonance is listened to while either view is showing, and not at all
+    // when both are shut.
+    _syncClient() {
+        if (this._isOpen || this._ambient.isOpen) {
+            this._client.setAudio(AUDIO_FEED);
+            this._client.start();
+        } else {
+            this._client.stop();
+        }
+    }
+
     open() {
         if (this._isOpen)
             return;
@@ -238,8 +269,7 @@ export class Popup {
         this._isOpen = true;
         this._backdrop.grab_key_focus();
 
-        this._client.setAudio(AUDIO_FEED);
-        this._client.start();
+        this._syncClient();
         this._visualizer.start();
         this._clock = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
             this._renderProgress();
@@ -264,8 +294,8 @@ export class Popup {
             return;
         this._isOpen = false;
         this._releaseGrab();
-        // Nothing is drawn or streamed while the popup is shut.
-        this._client.stop();
+        // Nothing is drawn or streamed while both views are shut.
+        this._syncClient();
         this._stopClock();
 
         this._popup.remove_all_transitions();
@@ -286,6 +316,7 @@ export class Popup {
 
     destroy() {
         this._releaseGrab();
+        this._ambient.destroy();
         this._client.stop();
         this._stopClock();
         this._art.destroy();
@@ -318,8 +349,14 @@ export class Popup {
 
     _onKeyPress(event) {
         const symbol = event.get_key_symbol();
-        const superHeld = (event.get_state() & Clutter.ModifierType.SUPER_MASK) !== 0;
-        if ((superHeld && (symbol === Clutter.KEY_m || symbol === Clutter.KEY_M)) ||
+        const state = event.get_state();
+        const superHeld = (state & Clutter.ModifierType.SUPER_MASK) !== 0;
+        const isM = symbol === Clutter.KEY_m || symbol === Clutter.KEY_M;
+        if (superHeld && isM && (state & Clutter.ModifierType.SHIFT_MASK) !== 0) {
+            this.toggleAmbient();
+            return Clutter.EVENT_STOP;
+        }
+        if ((superHeld && isM) ||
             symbol === Clutter.KEY_Escape) {
             this.close();
             return Clutter.EVENT_STOP;
@@ -334,6 +371,7 @@ export class Popup {
             [Clutter.KEY_Tab]: () => this._setMode(MODES[(index + 1) % MODES.length]),
             [Clutter.KEY_v]: () => this._setMode(MODES[(index + 1) % MODES.length]),
             [Clutter.KEY_ISO_Left_Tab]: () => this._setMode(MODES[(index + MODES.length - 1) % MODES.length]),
+            [Clutter.KEY_f]: () => this.toggleAmbient(),
         };
         MODES.forEach((mode, i) => {
             actions[Clutter.KEY_1 + i] = () => this._setMode(mode);
@@ -352,6 +390,7 @@ export class Popup {
     _applyMode() {
         const mode = this._settings.get_string('visualizer');
         this._visualizer.setMode(mode);
+        this._ambient.setMode(mode);
         for (const [name, chip] of this._modeButtons) {
             if (name === this._visualizer.mode)
                 chip.add_style_pseudo_class('checked');
@@ -385,12 +424,17 @@ export class Popup {
     _onStatus(status) {
         this._status = status;
         this._statusAt = GLib.get_monotonic_time();
+        this._syncCover();
+        this._ambient.setStatus(status);
+        this._ambient.setPlaying(this._playing());
         if (this._isOpen)
             this._render();
     }
 
     _onAudio(audio) {
         this._visualizer.feed(audio);
+        if (this._ambient.isOpen)
+            this._ambient.feed(audio);
         if (audio.tempo) {
             this._tempo.show();
             this._tempoLabel.text = `${Math.round(audio.tempo)} BPM`;
@@ -435,19 +479,22 @@ export class Popup {
             ? 'media-playback-pause-symbolic'
             : 'media-playback-start-symbolic';
         this._visualizer.setPlaying(this._playing());
-
-        const cover = playable?.cover_url ?? null;
-        if (cover !== this._coverUrl) {
-            this._coverUrl = cover;
-            this._tempo.hide();
-            if (cover)
-                this._art.fetch(cover, (path, palette) => this._applyArt(cover, path, palette));
-            else
-                this._applyArt(null, null, DEFAULT_PALETTE);
-        }
-
+        this._syncCover();
         this._renderUpNext();
         this._renderProgress();
+    }
+
+    // Fetch the cover when the track changes, for both views.
+    _syncCover() {
+        const cover = this._status?.playable?.cover_url ?? null;
+        if (cover === this._coverUrl)
+            return;
+        this._coverUrl = cover;
+        this._tempo.hide();
+        if (cover)
+            this._art.fetch(cover, (path, palette) => this._applyArt(cover, path, palette));
+        else
+            this._applyArt(null, null, DEFAULT_PALETTE);
     }
 
     _showMessage(text) {
@@ -462,6 +509,7 @@ export class Popup {
         this._cover.style = image;
         this._visualizer.disc.style = image;
         this._visualizer.setPalette(palette);
+        this._ambient.setArt(path, palette);
         // The glass takes on the cover's colour, deep enough for white text.
         this._popup.style =
             `background-gradient-start: ${rgba(palette.dark, 0.78)};` +

@@ -5,6 +5,10 @@
       <default><![CDATA[['<Super>m']]]></default>
       <summary>Open or close the Resonance popup</summary>
     </key>
+    <key name="toggle-ambient" type="as">
+      <default><![CDATA[['<Shift><Super>m']]]></default>
+      <summary>Open or close the full-screen visualizer</summary>
+    </key>
     <key name="visualizer" type="s">
       <choices>
         <choice value="orbit"/>

@@ -13,6 +13,9 @@ export const DEFAULT_PALETTE = {
 
 const HUE_BINS = 12;
 const SAMPLE_SIZE = 32;
+// The cover is drawn as the sun on the Ridges horizon. Cairo only reads PNG,
+// so a small one is saved beside the downloaded JPEG.
+const SUN_SIZE = 192;
 
 function isCancelled(e) {
     return e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
@@ -99,6 +102,16 @@ export function paletteFromFile(path) {
     };
 }
 
+// A PNG of the cover small enough to redraw every frame, made once.
+function sunFromFile(path) {
+    const sun = path.replace(/\.jpg$/, '-sun.png');
+    if (!GLib.file_test(sun, GLib.FileTest.EXISTS)) {
+        GdkPixbuf.Pixbuf.new_from_file_at_scale(path, SUN_SIZE, SUN_SIZE, false)
+            .savev(sun, 'png', [], []);
+    }
+    return sun;
+}
+
 // Cover art from Spotify's image server, kept in ~/.cache/resonance-gnome so
 // the same album only downloads once.
 export class ArtCache {
@@ -143,7 +156,7 @@ export class ArtCache {
         if (!this._palettes.has(path)) {
             let palette = DEFAULT_PALETTE;
             try {
-                palette = paletteFromFile(path);
+                palette = {...paletteFromFile(path), sun: sunFromFile(path)};
             } catch (e) {
                 console.warn(`Resonance: palette for ${path}: ${e.message}`);
             }

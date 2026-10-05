@@ -6,6 +6,8 @@ import St from 'gi://St';
 
 const BUILD = import.meta.url.match(/[?&]v=(\d+)/)?.[1] ?? '0';
 const {DEFAULT_PALETTE} = await import(`./palette.js?v=${BUILD}`);
+const {mix, roundedRect, smoothLine} = await import(`./draw.js?v=${BUILD}`);
+const {Ridges} = await import(`./ridges.js?v=${BUILD}`);
 
 export const MODES = ['orbit', 'bars', 'ridges', 'scope'];
 export const MODE_LABELS = {orbit: 'Orbit', bars: 'Bars', ridges: 'Ridges', scope: 'Scope'};
@@ -14,12 +16,6 @@ export const MODE_LABELS = {orbit: 'Orbit', bars: 'Bars', ridges: 'Ridges', scop
 // the drawing smooths between them anyway.
 export const AUDIO_FEED = {fps: 60, bands: 64, waveform: 256};
 
-const RIDGE_ROWS = 32;
-const RIDGE_POINTS = 64;
-const RIDGE_SECONDS = 1 / 18;
-// How quickly ridges shrink with distance. A ridge `d` rows back is drawn at
-// 1 / (1 + d * RIDGE_DEPTH) of its size, which is what perspective does.
-const RIDGE_DEPTH = 0.16;
 const SCOPE_TRAILS = 5;
 const CORNER = 18;
 
@@ -29,39 +25,6 @@ const CORNER = 18;
 function shape(value) {
     const stretched = Math.min(1, Math.max(0, (value - 0.18) / 0.72));
     return stretched ** 1.35;
-}
-
-function mix(a, b, t) {
-    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-}
-
-function roundedRect(cr, x, y, w, h, r) {
-    cr.newSubPath();
-    cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
-    cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
-    cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
-    cr.arc(x + r, y + r, r, Math.PI, 1.5 * Math.PI);
-    cr.closePath();
-}
-
-// A smooth curve through points, as Catmull-Rom segments turned into Béziers.
-function smoothLine(cr, points, moveFirst = true) {
-    if (points.length < 2)
-        return;
-    if (moveFirst)
-        cr.moveTo(points[0][0], points[0][1]);
-    else
-        cr.lineTo(points[0][0], points[0][1]);
-    for (let i = 0; i < points.length - 1; i++) {
-        const p0 = points[Math.max(0, i - 1)];
-        const p1 = points[i];
-        const p2 = points[i + 1];
-        const p3 = points[Math.min(points.length - 1, i + 2)];
-        cr.curveTo(
-            p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6,
-            p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6,
-            p2[0], p2[1]);
-    }
 }
 
 // The card the visualizers draw on. It owns the motion: audio frames set
@@ -82,11 +45,9 @@ export const Visualizer = GObject.registerClass({
         this._fall = new Float32Array(AUDIO_FEED.bands);
         this._waveform = [];
         this._trails = [];
-        // Each ridge is {values, palette, beat}: the spectrum when it was taken,
-        // the colours of the song playing then, and how hard a beat hit during it.
-        this._ridges = [];
-        this._ridgeClock = 0;
-        this._ridgeBeat = 0;
+        this._ridges = new Ridges();
+        // The full-screen view draws edge to edge.
+        this.corner = CORNER;
         this._level = 0;
         this._pulse = 0;
         this._flash = 0;
@@ -129,10 +90,10 @@ export const Visualizer = GObject.registerClass({
         this._waveform = audio.live ? audio.waveform ?? [] : [];
         this._level = audio.live ? audio.level : 0;
         this._pulse = audio.live ? audio.pulse : 0;
+        this._ridges.setTempo(audio.live ? audio.tempo : null);
         if (this._beats !== null && audio.beats > this._beats) {
             this._flash = 1;
-            // Remembered until the next ridge is taken, which carries it away.
-            this._ridgeBeat = Math.max(this._ridgeBeat, Math.min(1, Math.max(0.5, audio.pulse * 1.4)));
+            this._ridges.beat(Math.min(1, Math.max(0.5, audio.pulse * 1.4)));
         }
         this._beats = audio.beats;
     }
@@ -171,13 +132,7 @@ export const Visualizer = GObject.registerClass({
         this._flash *= Math.exp(-dt * 5);
         this._pulse *= Math.exp(-dt * 4);
 
-        this._ridgeClock += dt;
-        while (this._ridgeClock >= RIDGE_SECONDS) {
-            this._ridgeClock -= RIDGE_SECONDS;
-            this._ridges.unshift({values: this._ridgeRow(), palette: this._palette, beat: this._ridgeBeat});
-            this._ridgeBeat = 0;
-            this._ridges.length = Math.min(this._ridges.length, RIDGE_ROWS);
-        }
+        this._ridges.step(dt, this._view());
         if (this._waveform.length) {
             this._trails.unshift(this._waveform);
             this._trails.length = Math.min(this._trails.length, SCOPE_TRAILS);
@@ -194,18 +149,15 @@ export const Visualizer = GObject.registerClass({
         this.queue_repaint();
     }
 
-    // The spectrum folded into a mountain, bass in the middle and treble at
-    // the edges, tapered so every ridge meets the ground.
-    _ridgeRow() {
-        const row = new Float32Array(RIDGE_POINTS);
-        const bands = this._shown.length;
-        for (let i = 0; i < RIDGE_POINTS; i++) {
-            const fromCentre = Math.abs(i - (RIDGE_POINTS - 1) / 2) / ((RIDGE_POINTS - 1) / 2);
-            const band = Math.min(bands - 1, Math.floor(fromCentre * bands * 0.8));
-            const taper = Math.cos(fromCentre * Math.PI / 2) ** 1.6;
-            row[i] = this._shown[band] * taper;
-        }
-        return row;
+    // What the Ridges scene needs to know about the picture right now.
+    _view() {
+        return {
+            shown: this._shown,
+            palette: this._palette,
+            flash: this._flash,
+            level: this._level,
+            live: this._live,
+        };
     }
 
     vfunc_repaint() {
@@ -214,12 +166,12 @@ export const Visualizer = GObject.registerClass({
         try {
             this._drawCard(cr, w, h);
             cr.save();
-            roundedRect(cr, 0, 0, w, h, CORNER);
+            roundedRect(cr, 0, 0, w, h, this.corner);
             cr.clip();
             if (this.mode === 'bars')
                 this._drawBars(cr, w, h);
             else if (this.mode === 'ridges')
-                this._drawRidges(cr, w, h);
+                this._ridges.draw(cr, w, h, this._view());
             else if (this.mode === 'scope')
                 this._drawScope(cr, w, h);
             else
@@ -232,11 +184,19 @@ export const Visualizer = GObject.registerClass({
 
     _drawCard(cr, w, h) {
         const {dark, primary} = this._palette;
+        // Ridges paints its own sky and ground over the whole card, so a flat
+        // fill will do, and is far cheaper than a gradient at full screen.
+        if (this.mode === 'ridges') {
+            roundedRect(cr, 0, 0, w, h, this.corner);
+            cr.setSourceRGBA(...mix(dark, [0, 0, 0], 0.4), 1);
+            cr.fill();
+            return;
+        }
         const glow = mix(dark, primary, 0.12 + 0.18 * this._flash + 0.1 * this._level);
         const gradient = new Cairo.RadialGradient(w / 2, h * 0.55, 0, w / 2, h * 0.55, Math.max(w, h) * 0.75);
         gradient.addColorStopRGBA(0, ...glow, 1);
         gradient.addColorStopRGBA(1, ...mix(dark, [0, 0, 0], 0.55), 1);
-        roundedRect(cr, 0, 0, w, h, CORNER);
+        roundedRect(cr, 0, 0, w, h, this.corner);
         cr.setSource(gradient);
         cr.fill();
     }
@@ -336,90 +296,6 @@ export const Visualizer = GObject.registerClass({
             cr.fill();
         }
         cr.setOperator(Cairo.Operator.OVER);
-    }
-
-    _drawRidges(cr, w, h) {
-        const horizon = h * 0.27;
-        const ground = h - 16;
-        const lift = h * 0.36;
-        // Wider than the card at the front, so the nearest ridges run off its edges.
-        const span = w * 1.12;
-        const glow = this._palette.secondary;
-
-        // A sky that brightens towards the horizon, and the horizon itself.
-        const sky = new Cairo.LinearGradient(0, 0, 0, horizon + 4);
-        sky.addColorStopRGBA(0, ...glow, 0);
-        sky.addColorStopRGBA(1, ...glow, 0.16 + 0.22 * this._level + 0.18 * this._flash);
-        cr.rectangle(0, 0, w, horizon + 4);
-        cr.setSource(sky);
-        cr.fill();
-        const line = new Cairo.LinearGradient(0, 0, w, 0);
-        line.addColorStopRGBA(0, ...glow, 0);
-        line.addColorStopRGBA(0.5, ...mix(glow, [1, 1, 1], 0.4), 0.55 + 0.35 * this._flash);
-        line.addColorStopRGBA(1, ...glow, 0);
-        // The plain the ridges stand on, hazing into the horizon, so the
-        // furthest ones sit on ground that runs out to it rather than floating.
-        const earth = (palette, fog) => mix(mix(palette.dark, [0, 0, 0], 0.45), glow, fog * 0.16);
-        const plain = new Cairo.LinearGradient(0, horizon, 0, ground);
-        plain.addColorStopRGBA(0, ...earth(this._palette, 1), 1);
-        plain.addColorStopRGBA(0.35, ...earth(this._palette, 0.15), 1);
-        plain.addColorStopRGBA(1, ...earth(this._palette, 0), 1);
-        cr.rectangle(0, horizon, w, h - horizon);
-        cr.setSource(plain);
-        cr.fill();
-        cr.rectangle(0, horizon - 0.75, w, 1.5);
-        cr.setSource(line);
-        cr.fill();
-
-        // Ridges slide back continuously between the moments they are taken.
-        // The live one at the front follows the music every frame; each one
-        // taken starts out identical to it and then peels away behind.
-        const phase = this._ridgeClock / RIDGE_SECONDS;
-        const live = {values: this._ridgeRow(), palette: this._palette, beat: this._flash};
-        const ridges = [live, ...this._ridges];
-        for (let r = ridges.length - 1; r >= 0; r--) {
-            const ridge = ridges[r];
-            const depth = r === 0 ? 0 : r - 1 + phase;
-            const scale = 1 / (1 + depth * RIDGE_DEPTH);
-            // 0 at the front to 1 at the back, for fading into the distance.
-            const fog = Math.min(1, depth / RIDGE_ROWS);
-            // The last ridge fades out rather than vanishing as it drops off.
-            const fade = Math.min(1, RIDGE_ROWS - depth);
-            if (fade <= 0)
-                continue;
-            const base = horizon + (ground - horizon) * scale;
-            const width = span * scale;
-            const left = (w - width) / 2;
-            const values = ridge.values;
-            const points = [];
-            for (let i = 0; i < values.length; i++)
-                points.push([left + i / (values.length - 1) * width, base - values[i] * lift * scale]);
-
-            // Filled down to the floor so it hides the ridges behind it, in its
-            // song's darkest colour hazed towards the horizon.
-            smoothLine(cr, points);
-            cr.lineTo(left + width, h);
-            cr.lineTo(left, h);
-            cr.closePath();
-            cr.setSourceRGBA(...earth(ridge.palette, fog), fade);
-            cr.fill();
-
-            const color = mix(mix(ridge.palette.primary, ridge.palette.secondary, fog), [1, 1, 1], ridge.beat * 0.55);
-            const alpha = Math.min(1, 0.95 - fog * 0.6 + ridge.beat * 0.3) * fade;
-            if (ridge.beat > 0.05) {
-                // A beat ridge glows, so the rhythm marches off as bright stripes.
-                cr.setOperator(Cairo.Operator.ADD);
-                smoothLine(cr, points);
-                cr.setLineWidth((4 + 8 * ridge.beat) * scale);
-                cr.setSourceRGBA(...color, 0.16 * ridge.beat * fade);
-                cr.stroke();
-                cr.setOperator(Cairo.Operator.OVER);
-            }
-            smoothLine(cr, points);
-            cr.setLineWidth((r === 0 ? 2.2 : 1.1) * (0.5 + 0.5 * scale) + ridge.beat * 1.4 * scale);
-            cr.setSourceRGBA(...color, alpha);
-            cr.stroke();
-        }
     }
 
     _drawScope(cr, w, h) {

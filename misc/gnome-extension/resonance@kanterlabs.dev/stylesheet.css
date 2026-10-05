@@ -203,3 +203,43 @@
     font-weight: 700;
     color: rgba(255, 255, 255, 0.7);
 }
+
+/* Full screen */
+.rz-ambient {
+    background-color: #000;
+}
+
+.rz-ambient-info {
+    spacing: 18px;
+    padding: 0 0 52px 56px;
+}
+
+.rz-ambient-cover {
+    border-radius: 14px;
+    background-color: rgba(255, 255, 255, 0.08);
+    background-size: cover;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+}
+
+.rz-ambient-title {
+    font-family: "Inter", sans-serif;
+    font-size: 30px;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+
+.rz-ambient-artist {
+    font-family: "Inter", sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.78);
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+}
+
+.rz-ambient-hint {
+    padding: 28px 36px 0 0;
+    font-family: "Inter", sans-serif;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+}

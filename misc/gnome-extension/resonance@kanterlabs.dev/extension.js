@@ -9,7 +9,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 // GNOME Shell caches ES modules for the whole session. Importing the popup with
 // the newest module mtime in the URL means a disable/enable picks up edits
 // without logging out. popup.js passes the same version on to the others.
-const MODULES = ['popup.js', 'client.js', 'palette.js', 'visualizer.js'];
+const MODULES = ['popup.js', 'client.js', 'palette.js', 'visualizer.js', 'draw.js', 'ridges.js', 'ambient.js'];
 
 function popupUrl(dir) {
     const version = Math.max(...MODULES.map(name => dir.get_child(name)
@@ -35,12 +35,19 @@ export default class ResonanceExtension extends Extension {
             Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
             Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
             () => this._popup.toggle());
+        Main.wm.addKeybinding(
+            'toggle-ambient',
+            this._settings,
+            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            () => this._popup.toggleAmbient());
     }
 
     disable() {
         this._token = null;
         if (this._popup) {
             Main.wm.removeKeybinding('toggle-popup');
+            Main.wm.removeKeybinding('toggle-ambient');
             this._popup.destroy();
             this._popup = null;
         }
