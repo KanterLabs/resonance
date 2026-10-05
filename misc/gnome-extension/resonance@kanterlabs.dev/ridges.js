@@ -16,6 +16,11 @@ const STARS = 90;
 // The sun's halo is drawn once into an image this size and scaled up, since a
 // radial gradient computed per pixel is slow on a full-screen canvas.
 const HALO_SIZE = 128;
+// Stretches either side that each point of the skyline is averaged over, about
+// six seconds of a typical song. Each stretch's loudness is only a handful of
+// brief readings, which land on or between drum hits, so neighbours differ by
+// far more than the song's real ups and downs.
+const SKYLINE_SMOOTHING = 3;
 // How much each kind of beat lights its ridge: an ordinary beat, the first
 // beat of a bar, of a four-bar phrase, and of a sixteen-bar section.
 const ACCENTS = [0.45, 0.8, 1, 1];
@@ -29,6 +34,26 @@ function average(values, [from, to]) {
     for (let i = from; i < to; i++)
         sum += values[i];
     return sum / (to - from);
+}
+
+// Each heard value averaged with its heard neighbours, nearer ones counting
+// more. Unheard stretches stay unheard rather than being guessed at.
+function smoothed(values) {
+    return values.map((value, i) => {
+        if (value === null)
+            return null;
+        let sum = 0;
+        let weight = 0;
+        for (let k = -SKYLINE_SMOOTHING; k <= SKYLINE_SMOOTHING; k++) {
+            const neighbour = values[i + k];
+            if (neighbour === undefined || neighbour === null)
+                continue;
+            const share = SKYLINE_SMOOTHING + 1 - Math.abs(k);
+            sum += neighbour * share;
+            weight += share;
+        }
+        return sum / weight;
+    });
 }
 
 // The same sky every time, from a small seeded generator.
@@ -100,9 +125,10 @@ export class Ridges {
             this._phraseOrigin = null;
         this._map = map?.level ? map : null;
         if (this._map) {
+            this._skyline = smoothed(this._map.level);
             // The song's own quietest and loudest stretches, so every skyline
             // uses its full height whatever the mastering.
-            const heard = this._map.level.filter(value => value !== null);
+            const heard = this._skyline.filter(value => value !== null);
             this._mapLow = heard.length ? Math.min(...heard) : 0;
             this._mapHigh = heard.length ? Math.max(...heard) : 1;
         }
@@ -384,8 +410,8 @@ export class Ridges {
         const width = w - left * 2;
         const tall = horizon * 0.34;
         const range = Math.max(0.05, this._mapHigh - this._mapLow);
-        const count = map.level.length;
-        const points = map.level.map((value, i) => {
+        const count = this._skyline.length;
+        const points = this._skyline.map((value, i) => {
             const height = value === null ? 0.02 : 0.08 + 0.92 * ((value - this._mapLow) / range) ** 1.3;
             return [left + (i + 0.5) / count * width, horizon - height * tall];
         });
