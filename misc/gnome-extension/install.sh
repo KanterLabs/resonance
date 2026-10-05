@@ -17,7 +17,18 @@ if gnome-extensions info "$uuid" >/dev/null 2>&1; then
     # versions them by mtime).
     gnome-extensions disable "$uuid" || true
     gnome-extensions enable "$uuid"
-    echo "Reloaded $uuid. Press Super+M."
+    sleep 1
+    state=$(gnome-extensions info "$uuid" | sed -n 's/^ *State: //p')
+    if [[ $state == ERROR ]]; then
+        # GNOME never re-enables an extension that has failed, so disable and
+        # enable cannot bring it back. Reloading it from inside the shell can.
+        journalctl --user -b -o cat --since '-1 min' /usr/bin/gnome-shell | grep -i -A3 "$uuid" | tail -8 || true
+        echo "$uuid is in ERROR. Fix the error above, run this again, then reload it"
+        echo "from Looking Glass (Alt+F2, lg):"
+        echo "  Main.extensionManager.reloadExtension(Main.extensionManager.lookup('$uuid'))"
+        exit 1
+    fi
+    echo "Reloaded $uuid (${state:-unknown}). Press Super+M."
 else
     echo "Installed $uuid. Log out and back in, then run:"
     echo "  gnome-extensions enable $uuid"
