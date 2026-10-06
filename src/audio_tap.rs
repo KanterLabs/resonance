@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use librespot_playback::audio_backend::{Sink, SinkResult};
@@ -8,7 +8,7 @@ use librespot_playback::decoder::AudioPacket;
 
 /// Samples kept for analysis. One FFT window at 44.1kHz is about 23ms of audio,
 /// short enough to track a beat and long enough to resolve a bass note.
-const WINDOW: usize = 1024;
+pub(crate) const WINDOW: usize = 1024;
 /// Audio older than this counts as silence, so the bars settle when playback stops
 /// or when a backend hands us nothing to look at.
 const STALE_AFTER: Duration = Duration::from_millis(400);
@@ -17,7 +17,7 @@ const FLOOR_DB: f32 = -62.0;
 /// Bands cover this range in Hz. Below is rumble, above is mostly air.
 const LOW_HZ: f32 = 40.0;
 const HIGH_HZ: f32 = 15_000.0;
-const SAMPLE_RATE: f32 = 44_100.0;
+pub(crate) const SAMPLE_RATE: f32 = 44_100.0;
 
 /// Where the beat detector stops listening. Kick drums and bass notes live below
 /// this; everything above is what the rest of the mix is doing.
@@ -44,6 +44,13 @@ const TEMPO_MINIMUM: usize = 6;
 /// this get doubled or halved until they land in it.
 const TEMPO_RANGE: std::ops::Range<f32> = 70.0..140.0;
 
+/// Time since the first packet any tap heard. Beats are timed on this clock rather than
+/// `Instant`, so `crate::builder::offline` can replay decoded audio on a clock of its own.
+fn now() -> Duration {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed()
+}
+
 /// The most recent audio on its way to the speakers.
 ///
 /// The playback sink is wrapped so that every packet is seen on its way through;
@@ -63,12 +70,12 @@ pub struct AudioTap {
 /// packets arrive steadily and frames do not; a dropped frame would otherwise cost
 /// a beat. The work is a filter and a sum over each packet, no transform.
 #[derive(Default)]
-struct BeatDetector {
+pub(crate) struct BeatDetector {
     /// Carried between packets so the filter does not restart at every boundary.
     filtered: f32,
     /// The running average of recent bass energy, which a beat has to beat.
     average: f32,
-    last_beat: Option<Instant>,
+    last_beat: Option<Duration>,
     strength: f32,
     /// Every beat heard since playback began, so a reader polling between beats
     /// can tell that one landed even if its pulse has already faded.
@@ -119,7 +126,7 @@ impl AudioTap {
         }
         drop(window);
         *self.last_packet.lock().unwrap() = Some(Instant::now());
-        self.beat.lock().unwrap().feed(samples);
+        self.beat.lock().unwrap().feed(samples, now());
     }
 
     /// How hard the music is hitting right now, 0 to 1.
@@ -131,7 +138,7 @@ impl AudioTap {
         let Some(last) = beat.last_beat else {
             return 0.0;
         };
-        let elapsed = last.elapsed().as_secs_f32() / PULSE_DECAY.as_secs_f32();
+        let elapsed = now().saturating_sub(last).as_secs_f32() / PULSE_DECAY.as_secs_f32();
         (beat.strength * (-elapsed).exp()).clamp(0.0, 1.0)
     }
 
@@ -147,10 +154,7 @@ impl AudioTap {
         if !window.filled {
             return 0.0;
         }
-        let sum: f32 = window.samples.iter().map(|sample| sample * sample).sum();
-        let rms = (sum / WINDOW as f32).sqrt();
-        let decibels = 20.0 * rms.max(1e-9).log10();
-        ((decibels - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0)
+        level_of(&window.samples)
     }
 
     /// The tempo of what is playing, in beats per minute, once enough beats have
@@ -159,18 +163,7 @@ impl AudioTap {
     /// The median gap between beats rather than the mean, so one missed beat moves
     /// the answer by nothing instead of by half.
     pub fn tempo(&self) -> Option<f32> {
-        let beat = self.beat.lock().unwrap();
-        if beat.intervals.len() < TEMPO_MINIMUM {
-            return None;
-        }
-        let mut gaps: Vec<f32> = beat.intervals.iter().copied().collect();
-        drop(beat);
-        gaps.sort_by(f32::total_cmp);
-        let median = gaps[gaps.len() / 2];
-        if median <= 0.0 {
-            return None;
-        }
-        Some(fold_tempo(60.0 / median))
+        self.beat.lock().unwrap().tempo()
     }
 
     /// Whether audio has arrived recently enough to be worth drawing.
@@ -244,33 +237,50 @@ impl AudioTap {
         if count == 0 {
             return None;
         }
-        let magnitudes = spectrum(&self.recent()?);
-        let bin_hz = SAMPLE_RATE / WINDOW as f32;
-        let mut bands = Vec::with_capacity(count);
-        for band in 0..count {
-            let edge = |index: usize| {
-                let fraction = index as f32 / count as f32;
-                LOW_HZ * (HIGH_HZ / LOW_HZ).powf(fraction)
-            };
-            let first = (edge(band) / bin_hz).floor().max(1.0) as usize;
-            let last = ((edge(band + 1) / bin_hz).ceil() as usize).max(first + 1);
-
-            // The loudest bin in the band, so a narrow tone is not averaged away.
-            let peak = magnitudes
-                .get(first..last.min(magnitudes.len()))
-                .unwrap_or_default()
-                .iter()
-                .fold(0.0f32, |peak, &magnitude| peak.max(magnitude));
-            let decibels = 20.0 * peak.max(1e-9).log10();
-            bands.push(((decibels - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0));
-        }
-        Some(bands)
+        Some(bands_of(&self.recent()?, count))
     }
 }
 
+/// The level of a window of mono samples, 0 to 1, on the decibel scale the bands use.
+pub(crate) fn level_of(window: &[f32]) -> f32 {
+    if window.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = window.iter().map(|sample| sample * sample).sum();
+    let rms = (sum / window.len() as f32).sqrt();
+    let decibels = 20.0 * rms.max(1e-9).log10();
+    ((decibels - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0)
+}
+
+/// `count` log spaced bands, each 0 to 1, of a window of `WINDOW` mono samples.
+pub(crate) fn bands_of(window: &[f32], count: usize) -> Vec<f32> {
+    let magnitudes = spectrum(window);
+    let bin_hz = SAMPLE_RATE / WINDOW as f32;
+    let mut bands = Vec::with_capacity(count);
+    for band in 0..count {
+        let edge = |index: usize| {
+            let fraction = index as f32 / count as f32;
+            LOW_HZ * (HIGH_HZ / LOW_HZ).powf(fraction)
+        };
+        let first = (edge(band) / bin_hz).floor().max(1.0) as usize;
+        let last = ((edge(band + 1) / bin_hz).ceil() as usize).max(first + 1);
+
+        // The loudest bin in the band, so a narrow tone is not averaged away.
+        let peak = magnitudes
+            .get(first..last.min(magnitudes.len()))
+            .unwrap_or_default()
+            .iter()
+            .fold(0.0f32, |peak, &magnitude| peak.max(magnitude));
+        let decibels = 20.0 * peak.max(1e-9).log10();
+        bands.push(((decibels - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0));
+    }
+    bands
+}
+
 impl BeatDetector {
-    /// Take in a packet and decide whether a beat just landed in it.
-    fn feed(&mut self, samples: &[f64]) {
+    /// Take in a packet of interleaved stereo that reached the speakers at `at`, and decide
+    /// whether a beat just landed in it.
+    pub(crate) fn feed(&mut self, samples: &[f64], at: Duration) {
         let frames = samples.as_chunks::<2>().0;
         if frames.is_empty() {
             return;
@@ -292,14 +302,13 @@ impl BeatDetector {
             && energy > self.average * BEAT_SENSITIVITY
             && self
                 .last_beat
-                .is_none_or(|last| last.elapsed() >= REFRACTORY);
+                .is_none_or(|last| at.saturating_sub(last) >= REFRACTORY);
         if beat {
             // How far past the average it got, so a gentle beat pulses gently.
             self.strength =
                 ((energy / self.average - BEAT_SENSITIVITY) / BEAT_SENSITIVITY).clamp(0.35, 1.0);
-            let now = Instant::now();
             if let Some(last) = self.last_beat {
-                let gap = last.elapsed().as_secs_f32();
+                let gap = at.saturating_sub(last).as_secs_f32();
                 // A gap longer than this is a pause or a missed run of beats, not a
                 // tempo, and averaging it in would drag the answer down.
                 if gap < 2.0 {
@@ -309,7 +318,7 @@ impl BeatDetector {
                     self.intervals.push_back(gap);
                 }
             }
-            self.last_beat = Some(now);
+            self.last_beat = Some(at);
             self.count += 1;
         }
 
@@ -317,6 +326,24 @@ impl BeatDetector {
         let seconds = frames.len() as f32 / SAMPLE_RATE;
         let weight = (seconds / ENERGY_MEMORY).clamp(0.0, 1.0);
         self.average += weight * (energy - self.average);
+    }
+
+    /// The tempo of what has been heard, in beats per minute, once enough beats have been
+    /// seen to be sure of it.
+    ///
+    /// The median gap between beats rather than the mean, so one missed beat moves
+    /// the answer by nothing instead of by half.
+    pub(crate) fn tempo(&self) -> Option<f32> {
+        if self.intervals.len() < TEMPO_MINIMUM {
+            return None;
+        }
+        let mut gaps: Vec<f32> = self.intervals.iter().copied().collect();
+        gaps.sort_by(f32::total_cmp);
+        let median = gaps[gaps.len() / 2];
+        if median <= 0.0 {
+            return None;
+        }
+        Some(fold_tempo(60.0 / median))
     }
 }
 
@@ -439,7 +466,7 @@ impl Sink for TapSink {
 mod tests {
     use super::{
         AudioTap, BeatDetector, HIGH_HZ, LOW_HZ, SAMPLE_RATE, TEMPO_MINIMUM, TEMPO_RANGE, WINDOW,
-        fold_tempo,
+        fold_tempo, now,
     };
     use std::time::Duration;
 
@@ -518,7 +545,7 @@ mod tests {
         let mut detector = BeatDetector::default();
         for _ in 0..packets {
             detector.last_beat = None;
-            detector.feed(&tone(60.0, amplitude));
+            detector.feed(&tone(60.0, amplitude), now());
         }
         detector
     }
@@ -527,7 +554,7 @@ mod tests {
     fn a_kick_after_a_quiet_passage_registers() {
         let mut detector = detector_fed(40, 0.03);
         detector.last_beat = None;
-        detector.feed(&tone(60.0, 0.9));
+        detector.feed(&tone(60.0, 0.9), now());
 
         assert!(detector.last_beat.is_some(), "a kick should read as a beat");
         assert!(
@@ -543,7 +570,7 @@ mod tests {
         // average has caught up an unchanging tone is not a beat any more.
         let mut detector = detector_fed(200, 0.5);
         detector.last_beat = None;
-        detector.feed(&tone(60.0, 0.5));
+        detector.feed(&tone(60.0, 0.5), now());
         assert!(detector.last_beat.is_none());
     }
 
@@ -552,7 +579,7 @@ mod tests {
         // A loud hi-hat is not a kick: the low pass is what tells them apart.
         let mut detector = detector_fed(40, 0.03);
         detector.last_beat = None;
-        detector.feed(&tone(8000.0, 0.9));
+        detector.feed(&tone(8000.0, 0.9), now());
         assert!(detector.last_beat.is_none());
     }
 
@@ -671,10 +698,10 @@ mod tests {
         let before = detector.count;
         // A kick well above the quiet bass the average has settled on.
         detector.last_beat = None;
-        detector.feed(&tone(60.0, 0.9));
+        detector.feed(&tone(60.0, 0.9), now());
         assert_eq!(detector.count, before + 1);
         // The next packet falls inside the refractory gap, so it is the same beat.
-        detector.feed(&tone(60.0, 0.9));
+        detector.feed(&tone(60.0, 0.9), now());
         assert_eq!(detector.count, before + 1);
     }
 }
