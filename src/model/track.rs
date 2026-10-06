@@ -35,6 +35,9 @@ pub struct Track {
     pub list_index: usize,
     pub is_local: bool,
     pub is_playable: Option<bool>,
+    /// The recording's ISRC, when Spotify listed it. Arcs use it to find a preview to measure.
+    #[serde(default)]
+    pub isrc: Option<String>,
 }
 
 impl Track {
@@ -73,6 +76,7 @@ impl Track {
             list_index: 0,
             is_local: track.is_local,
             is_playable: track.is_playable,
+            isrc: None,
         }
     }
 
@@ -112,6 +116,7 @@ impl From<&SimplifiedTrack> for Track {
             list_index: 0,
             is_local: track.is_local,
             is_playable: track.is_playable,
+            isrc: None,
         }
     }
 }
@@ -153,6 +158,7 @@ impl From<&FullTrack> for Track {
             list_index: 0,
             is_local: track.is_local,
             is_playable: track.is_playable,
+            isrc: track.external_ids.get("isrc").cloned(),
         }
     }
 }
@@ -338,5 +344,43 @@ impl ListItem for Track {
 
     fn as_listitem(&self) -> Box<dyn ListItem> {
         Box::new(self.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Track;
+    use rspotify::model::track::FullTrack;
+
+    #[test]
+    fn a_full_track_keeps_its_isrc() {
+        let full: FullTrack = serde_json::from_value(serde_json::json!({
+            "album": {"album_type": "album", "artists": [], "available_markets": [],
+                      "external_urls": {}, "href": null, "id": "4aawyAB9vmqN3uQ7FjRGTy",
+                      "images": [], "name": "Album", "release_date": null,
+                      "release_date_precision": null, "restrictions": null, "type": "album"},
+            "artists": [{"external_urls": {}, "href": null, "id": "0OdUWJ0sBjDrqHygGUXeCF",
+                         "name": "Artist", "type": "artist"}],
+            "disc_number": 1, "duration_ms": 200000, "explicit": false,
+            "external_ids": {"isrc": "GBAHS1600463"}, "external_urls": {}, "href": null,
+            "id": "7qiZfU4dY1lWllzX7mPBI3", "is_local": false, "name": "Song",
+            "popularity": 0, "preview_url": null, "track_number": 1, "type": "track"
+        }))
+        .unwrap();
+        assert_eq!(Track::from(&full).isrc.as_deref(), Some("GBAHS1600463"));
+    }
+
+    #[test]
+    fn tracks_cached_before_isrcs_still_load() {
+        let mut cached = serde_json::to_value(crate::builder::test_track(
+            "spotify:track:a",
+            "Artist",
+            "Album",
+            200_000,
+        ))
+        .unwrap();
+        cached.as_object_mut().unwrap().remove("isrc");
+        let track: Track = serde_json::from_value(cached).unwrap();
+        assert_eq!(track.isrc, None);
     }
 }

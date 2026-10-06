@@ -411,6 +411,7 @@ mod tests {
             list_index: index,
             is_local: false,
             is_playable: Some(true),
+            isrc: None,
         }
     }
 
@@ -554,6 +555,7 @@ mod tests {
             list_index: index,
             is_local: false,
             is_playable: Some(true),
+            isrc: None,
         };
         let alpha = track("FixtureTrackAlpha00001", "Fixture Alpha", 0);
         let beta = track("FixtureTrackBeta000002", "Fixture Beta", 1);

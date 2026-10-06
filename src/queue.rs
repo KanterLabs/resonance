@@ -2221,6 +2221,7 @@ mod tests {
             is_local: false,
             // Must be Some(true) so Spotify::load() doesn't fire events.
             is_playable: Some(true),
+            isrc: None,
         })
     }
 

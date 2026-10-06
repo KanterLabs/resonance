@@ -474,5 +474,6 @@ pub fn test_track(uri: &str, artist: &str, album: &str, duration: u32) -> Track 
         list_index: 0,
         is_local: false,
         is_playable: Some(true),
+        isrc: None,
     }
 }

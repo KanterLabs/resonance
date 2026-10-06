@@ -1864,6 +1864,7 @@ mod tests {
             list_index: index,
             is_local: false,
             is_playable: Some(true),
+            isrc: None,
         }
     }
     #[test]

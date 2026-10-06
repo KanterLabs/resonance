@@ -573,6 +573,7 @@ mod tests {
             list_index: 0,
             is_local: false,
             is_playable: Some(true),
+            isrc: None,
         });
         Remote {
             api: spotify.api.clone(),
