@@ -15,7 +15,11 @@ env:
 jobs:
   linux:
     name: Publish linux-x86_64
-    runs-on: homelab-heavy
+    runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     container:
       image: ubuntu:24.04
     steps:

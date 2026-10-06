@@ -14,7 +14,11 @@ jobs:
   # runner intentionally disallows sudo on the host.
   build-linux:
     name: Checking linux-x86_64
-    runs-on: homelab-heavy
+    runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     container:
       image: ubuntu:24.04
     steps:
@@ -80,6 +84,10 @@ jobs:
   updater:
     name: Check updater and populated backups
     runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     container:
       image: ubuntu:24.04
     steps:
@@ -153,6 +161,10 @@ jobs:
   fmt:
     name: Running `cargo fmt`
     runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - name: Install rustup
@@ -171,7 +183,11 @@ jobs:
     name: Running `cargo clippy`
     container:
       image: ubuntu:24.04
-    runs-on: homelab-heavy
+    runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     steps:
       - name: Install Linux dependencies
         run: |

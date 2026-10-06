@@ -7,7 +7,11 @@ on:
 jobs:
   update-rust-toolchain:
     name: "Update Rust Toolchain (rust-toolchain.toml)"
-    runs-on: ubuntu-latest
+    runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7

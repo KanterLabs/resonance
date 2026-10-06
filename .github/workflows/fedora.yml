@@ -44,7 +44,11 @@ concurrency:
 jobs:
   build:
     name: Building for Fedora ${{ inputs.fedora_version || '43' }}
-    runs-on: homelab-heavy
+    runs-on: homelab
+    concurrency:
+      group: resonance-homelab-heavy
+      queue: max
+      cancel-in-progress: false
     permissions:
       contents: write
     container:
