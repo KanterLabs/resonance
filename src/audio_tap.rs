@@ -328,6 +328,14 @@ impl BeatDetector {
         self.average += weight * (energy - self.average);
     }
 
+    /// Forget the beats heard so far but keep the running average, so audio that has been
+    /// played in can be measured without the jump from silence at its start reading as beats.
+    pub(crate) fn forget_beats(&mut self) {
+        self.last_beat = None;
+        self.intervals.clear();
+        self.count = 0;
+    }
+
     /// The tempo of what has been heard, in beats per minute, once enough beats have been
     /// seen to be sure of it.
     ///
@@ -348,7 +356,7 @@ impl BeatDetector {
 }
 
 /// A tempo doubled or halved until it lands in the range a listener would tap.
-fn fold_tempo(mut tempo: f32) -> f32 {
+pub(crate) fn fold_tempo(mut tempo: f32) -> f32 {
     if !tempo.is_finite() || tempo <= 0.0 {
         return 0.0;
     }

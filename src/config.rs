@@ -132,6 +132,9 @@ pub struct ConfigValues {
     /// Local radio exploration level, from familiar (0) to exploratory (100).
     /// When omitted, the value persisted in the user state is used.
     pub radio_discovery: Option<u8>,
+    /// Let arcs measure tracks that have not been played from Deezer's 30 second previews.
+    /// Sends track titles, artists and ISRCs to Deezer. On unless set to false.
+    pub arcs_preview_lookup: Option<bool>,
 }
 
 /// The Resonance theme.

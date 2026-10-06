@@ -196,6 +196,7 @@ impl Application {
             library.clone(),
         ));
         crate::builder::fingerprint::start(spotify.clone(), queue.clone());
+        crate::builder::preview::queue::start(queue.clone(), library.clone());
 
         #[cfg(feature = "mpris")]
         let mpris_manager = MprisManager::new(
@@ -445,6 +446,7 @@ impl Application {
         self.queue.finish_listening();
         crate::recommendations::history::shared().flush();
         crate::builder::fingerprint::flush();
+        crate::builder::preview::shared().save();
         crate::song_map::flush();
         Ok(())
     }

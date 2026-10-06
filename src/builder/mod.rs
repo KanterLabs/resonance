@@ -3,7 +3,10 @@
 //! The solver is pure; this module owns the one draft being edited, the pool it was drawn
 //! from, and the small file of recipes and playlists arcs have created.
 
+pub mod deezer;
 pub mod fingerprint;
+pub mod offline;
+pub mod preview;
 pub mod recipe;
 pub mod solve;
 pub mod transition;
@@ -68,26 +71,71 @@ pub fn service() -> &'static Service {
     SERVICE.get_or_init(Service::default)
 }
 
-/// Gather the pool for a recipe from what is already cached.
+/// Gather the pool for a recipe from what is already cached, and ask for the candidates that
+/// have not been played to be measured from previews before anything else.
 pub fn pool(queue: &Queue, library: &Library, seeds: &[Track], discovery: u8) -> Pool {
     let catalog = recommendations::catalog(queue, library);
     let history = history::shared();
-    let feedback = history.snapshot();
-    let recent = history.recent();
-    let store = fingerprint::shared();
-    let fingerprints = store.lookup(catalog.tracks.iter().chain(seeds));
-    let energies = store.energies();
-    let heard = heard_energy(catalog.tracks.iter().chain(seeds), &fingerprints);
-    Pool::build(&PoolInput {
+    let measured = Measurements::of(catalog.tracks.iter().chain(seeds));
+    let pool = Pool::build(&PoolInput {
         catalog: &catalog,
         seeds,
         discovery,
-        feedback: &feedback,
-        recent: &recent,
-        fingerprints: &fingerprints,
-        library_energies: &energies,
-        heard: &heard,
-    })
+        feedback: &history.snapshot(),
+        recent: &history.recent(),
+        fingerprints: &measured.fingerprints,
+        library_energies: &measured.energies,
+        previews: &measured.previews,
+        heard: &measured.heard,
+    });
+    if preview::queue::enabled(library) {
+        let mut wanted: Vec<_> = pool
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                !matches!(
+                    candidate.measure,
+                    solve::Measure::Measured | solve::Measure::Previewed
+                )
+            })
+            .collect();
+        wanted.sort_by(|a, b| b.seed.cmp(&a.seed).then(b.affinity.total_cmp(&a.affinity)));
+        preview::queue::shared().enqueue(
+            wanted.into_iter().map(|candidate| candidate.track.clone()),
+            preview::queue::Priority::Urgent,
+        );
+    }
+    pool
+}
+
+/// Everything measured about a set of tracks, in the shape the solver takes.
+struct Measurements {
+    fingerprints: HashMap<String, fingerprint::Fingerprint>,
+    previews: HashMap<String, fingerprint::Fingerprint>,
+    heard: HashMap<String, f64>,
+    /// Every listened raw energy, for normalizing against the library.
+    energies: Vec<f32>,
+}
+
+impl Measurements {
+    fn of<'a>(tracks: impl Iterator<Item = &'a Track> + Clone) -> Self {
+        let store = fingerprint::shared();
+        let fingerprints = store.lookup(tracks.clone());
+        let previews = preview::shared();
+        let unplayed = tracks
+            .clone()
+            .filter(|track| !fingerprints.contains_key(&track.uri));
+        let previews = previews
+            .calibration(&store)
+            .apply_all(previews.lookup(unplayed));
+        let heard = heard_energy(tracks, &fingerprints);
+        Self {
+            fingerprints,
+            previews,
+            heard,
+            energies: store.energies(),
+        }
+    }
 }
 
 /// Loudness the waveform learned for tracks without a fingerprint. Streamed audio is loudness
@@ -343,32 +391,32 @@ pub fn offline_report(
     };
     recipe.normalize()?;
     let history = history::shared();
-    let store = fingerprint::shared();
-    let fingerprints = store.lookup(catalog.tracks.iter().chain(&seeds));
-    let heard = heard_energy(catalog.tracks.iter().chain(&seeds), &fingerprints);
+    let measured = Measurements::of(catalog.tracks.iter().chain(&seeds));
     let pool = Pool::build(&PoolInput {
         catalog: &catalog,
         seeds: &seeds,
         discovery: recipe.discovery,
         feedback: &history.snapshot(),
         recent: &history.recent(),
-        fingerprints: &fingerprints,
-        library_energies: &store.energies(),
-        heard: &heard,
+        fingerprints: &measured.fingerprints,
+        library_energies: &measured.energies,
+        previews: &measured.previews,
+        heard: &measured.heard,
     });
     let started = std::time::Instant::now();
     let draft = solve::solve(&pool, &recipe);
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{} arc from {} · {} tracks · pool {} of {} cached · {} fingerprinted · {} heard · confidence {:.0}% · {} ms",
+        "{} arc from {} · {} tracks · pool {} of {} cached · {} fingerprinted · {} previewed · {} heard · confidence {:.0}% · {} ms",
         preset.label(),
         seeds[0].title,
         draft.slots.len(),
         pool.len(),
         catalog.tracks.len(),
-        store.len(),
-        heard.len(),
+        fingerprint::shared().len(),
+        measured.previews.len(),
+        measured.heard.len(),
         draft.confidence * 100.0,
         started.elapsed().as_millis()
     );

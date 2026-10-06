@@ -27,10 +27,12 @@ const MAX_ENTRIES: usize = 50_000;
 /// whichever is shorter.
 const MIN_LISTEN_MS: u64 = 45_000;
 const MIN_SHARE: f64 = 0.6;
+/// The least audio a fingerprint can be taken from outside of playback, such as a preview.
+const MIN_EXCERPT_MS: u64 = 20_000;
 /// Position buckets used to measure how a track starts and ends.
 const EDGE_BUCKETS: usize = 20;
 /// Bands read from the tap for brightness and density.
-const BANDS: usize = 16;
+pub(crate) const BANDS: usize = 16;
 /// Tempo readings must agree this closely with their median to count.
 const TEMPO_AGREEMENT: f32 = 0.06;
 const MIN_TEMPO_CONFIDENCE: f32 = 0.5;
@@ -54,6 +56,14 @@ pub struct Fingerprint {
     pub outro_energy: f32,
     pub listened_ms: u64,
     pub measured_at: i64,
+    /// Whether `intro_energy` and `outro_energy` were heard. A preview is an excerpt from the
+    /// middle of a track, so it says nothing about how the track starts or ends.
+    #[serde(default = "edges_heard")]
+    pub edges: bool,
+}
+
+fn edges_heard() -> bool {
+    true
 }
 
 /// One instant of playback, as read from the audio tap.
@@ -140,6 +150,13 @@ impl Session {
         if !self.ready() {
             return None;
         }
+        self.summarize(now)
+    }
+
+    fn summarize(&self, now: i64) -> Option<Fingerprint> {
+        if self.levels.is_empty() {
+            return None;
+        }
         let level = mean(&self.levels);
         let density = if self.density.is_empty() {
             level
@@ -179,8 +196,24 @@ impl Session {
             outro_energy: edge(EDGE_BUCKETS - 2..EDGE_BUCKETS),
             listened_ms: self.listened_ms,
             measured_at: now,
+            edges: true,
         })
     }
+}
+
+/// A fingerprint of `track` from readings taken outside of playback, such as from a preview
+/// run through `super::offline`. Its edges are not known.
+pub(crate) fn from_samples(track: &Track, samples: &[Sample], now: i64) -> Option<Fingerprint> {
+    let mut session = Session::new(track);
+    for sample in samples {
+        session.add(sample);
+    }
+    if session.listened_ms < MIN_EXCERPT_MS {
+        return None;
+    }
+    let mut fingerprint = session.summarize(now)?;
+    fingerprint.edges = false;
+    Some(fingerprint)
 }
 
 fn mean(values: &[f32]) -> f32 {
@@ -314,6 +347,21 @@ impl FingerprintStore {
 
     pub fn len(&self) -> usize {
         self.entries.read().unwrap().by_uri.len()
+    }
+
+    /// The raw energy measured for a URI, or for another release with the same song key.
+    pub fn energy_of(&self, uri: &str, song_key: &str) -> Option<f32> {
+        let entries = self.entries.read().unwrap();
+        entries
+            .by_uri
+            .get(uri)
+            .or_else(|| {
+                entries
+                    .by_song
+                    .get(song_key)
+                    .and_then(|uri| entries.by_uri.get(uri))
+            })
+            .map(|fingerprint| fingerprint.energy)
     }
 
     /// Fold one sample of the playing track in. A change of track finishes the previous one.
@@ -594,6 +642,7 @@ mod tests {
                     outro_energy: 0.5,
                     listened_ms: 50_000,
                     measured_at: index as i64,
+                    edges: true,
                 },
             );
         }

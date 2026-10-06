@@ -47,6 +47,7 @@ fn draft(draft: &Draft, recipe: &Recipe, playlist_id: Option<&str>) -> Value {
         "targets": draft.targets.iter().copied().map(round).collect::<Vec<_>>(),
         "confidence": draft.confidence,
         "measured": draft.measured,
+        "previewed": draft.previewed,
         "heard": draft.heard,
         "estimated": draft.estimated,
         "unmeasured": draft.unmeasured,
@@ -99,11 +100,20 @@ pub(super) fn dispatch(rpc: &RpcService, method: &str, p: &Value) -> Result<Valu
             let catalog = crate::recommendations::catalog(&rpc.queue, &rpc.library);
             let store = fingerprint::shared();
             let unique: HashSet<&str> = catalog.tracks.iter().map(|t| t.uri.as_str()).collect();
-            let measured = store.lookup(catalog.tracks.iter()).len();
+            let measured = store.lookup(catalog.tracks.iter());
+            let previews = builder::preview::shared();
+            let unplayed = catalog
+                .tracks
+                .iter()
+                .filter(|track| !measured.contains_key(&track.uri));
             Ok(json!({
                 "fingerprinted": store.len(),
-                "catalog_measured": measured,
+                "previewed": previews.measured(),
+                "catalog_measured": measured.len(),
+                "catalog_previewed": previews.lookup(unplayed).len(),
                 "catalog_tracks": unique.len(),
+                "preview_lookup": builder::preview::queue::enabled(&rpc.library),
+                "preview_pending": builder::preview::queue::shared().pending(),
             }))
         }
         "builder.build" => {

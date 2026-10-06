@@ -28,6 +28,7 @@ fn fingerprint(energy: f32, tempo: Option<f32>) -> Fingerprint {
         outro_energy: energy,
         listened_ms: 60_000,
         measured_at: 0,
+        edges: true,
     }
 }
 
@@ -94,6 +95,7 @@ fn pool_for(fixture: &Fixture) -> Pool {
         recent: &[],
         fingerprints: &fixture.fingerprints,
         library_energies: &energies,
+        previews: &HashMap::new(),
         heard: &HashMap::new(),
     })
 }
@@ -374,6 +376,7 @@ fn heard_loudness_counts_as_energy_and_reasons_are_plain() {
         recent: &[],
         fingerprints: &fixture.fingerprints,
         library_energies: &energies,
+        previews: &HashMap::new(),
         heard: &heard,
     });
     let candidate = pool.get(&loud).expect("in pool");
@@ -396,4 +399,56 @@ fn heard_loudness_counts_as_energy_and_reasons_are_plain() {
         draft.heard + draft.estimated + draft.measured + draft.unmeasured,
         draft.slots.len()
     );
+}
+
+#[test]
+fn a_preview_ranks_between_a_listen_and_heard_loudness() {
+    let fixture = fixture(false);
+    let uri = |index: usize| fixture.catalog.tracks[index].uri.clone();
+    let (listened, previewed, heard_only) = (uri(9), uri(17), uri(25));
+    let mut preview = fingerprint(0.8, Some(120.0));
+    preview.edges = false;
+    let fingerprints = HashMap::from([(listened.clone(), fingerprint(0.2, None))]);
+    let previews = HashMap::from([
+        (listened.clone(), preview.clone()),
+        (previewed.clone(), preview.clone()),
+    ]);
+    let heard = HashMap::from([(previewed.clone(), 0.1), (heard_only.clone(), 0.3)]);
+    let pool = Pool::build(&PoolInput {
+        catalog: &fixture.catalog,
+        seeds: std::slice::from_ref(&fixture.seed),
+        discovery: 30,
+        feedback: &HashMap::new(),
+        recent: &[],
+        fingerprints: &fingerprints,
+        library_energies: &[],
+        previews: &previews,
+        heard: &heard,
+    });
+    let measure = |uri: &str| pool.get(uri).unwrap().measure;
+    assert_eq!(measure(&listened), Measure::Measured);
+    assert!((pool.get(&listened).unwrap().energy - 0.2).abs() < 1e-6);
+    assert_eq!(measure(&previewed), Measure::Previewed);
+    assert!((pool.get(&previewed).unwrap().energy - 0.8).abs() < 1e-6);
+    assert!(pool.get(&previewed).unwrap().fingerprint.is_some());
+    assert_eq!(measure(&heard_only), Measure::Heard);
+    // Album mates of a previewed song borrow its energy.
+    assert_eq!(measure(&uri(16)), Measure::Estimated);
+
+    let draft = solve(&pool, &recipe(&fixture));
+    assert_eq!(
+        draft.measured + draft.previewed + draft.heard + draft.estimated + draft.unmeasured,
+        draft.slots.len()
+    );
+    for slot in draft
+        .slots
+        .iter()
+        .filter(|s| s.measure == Measure::Previewed)
+    {
+        assert!(
+            slot.reasons
+                .iter()
+                .any(|reason| reason.contains("from a preview"))
+        );
+    }
 }

@@ -13,9 +13,13 @@ pub fn transition(
         previous.and_then(|fingerprint| fingerprint.tempo),
         next.and_then(|fingerprint| fingerprint.tempo),
     );
-    let edge = match (previous, next) {
-        (Some(a), Some(b)) => 1.0 - (a.outro_energy - b.intro_energy).abs().min(1.0) as f64,
-        _ => 0.5,
+    let edges = match (previous, next) {
+        (Some(a), Some(b)) if a.edges && b.edges => Some((a, b)),
+        _ => None,
+    };
+    let edge = match edges {
+        Some((a, b)) => 1.0 - (a.outro_energy - b.intro_energy).abs().min(1.0) as f64,
+        None => 0.5,
     };
     let brightness = match (previous, next) {
         (Some(a), Some(b)) => 1.0 - (a.brightness - b.brightness).abs().min(1.0) as f64,
@@ -24,7 +28,7 @@ pub fn transition(
     let context = if share_playlist { 1.0 } else { 0.4 };
     let score = 0.4 * tempo + 0.3 * edge + 0.1 * brightness + 0.2 * context;
     let reason = tempo_reason.or_else(|| {
-        if edge >= 0.9 && previous.is_some() && next.is_some() {
+        if edge >= 0.9 && edges.is_some() {
             Some("smooth handoff from the last track's ending".to_string())
         } else if share_playlist {
             Some("shares a playlist with the previous track".to_string())
@@ -75,6 +79,7 @@ mod tests {
             outro_energy: outro,
             listened_ms: 60_000,
             measured_at: 0,
+            edges: true,
         }
     }
 
@@ -107,5 +112,19 @@ mod tests {
             transition(Some(&fade), Some(&soft), false).0
                 > transition(Some(&fade), Some(&loud), false).0
         );
+    }
+
+    #[test]
+    fn an_excerpt_without_edges_scores_its_handoff_neutrally() {
+        let fade = fingerprint(None, 0.6, 0.1);
+        let mut soft = fingerprint(None, 0.1, 0.6);
+        let mut loud = fingerprint(None, 0.9, 0.6);
+        soft.edges = false;
+        loud.edges = false;
+        assert_eq!(
+            transition(Some(&fade), Some(&soft), false),
+            transition(Some(&fade), Some(&loud), false)
+        );
+        assert_eq!(transition(Some(&fade), Some(&soft), false).1, None);
     }
 }

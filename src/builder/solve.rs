@@ -36,6 +36,8 @@ const MIN_NORMALIZATION_SAMPLES: usize = 20;
 #[serde(rename_all = "snake_case")]
 pub enum Measure {
     Measured,
+    /// From Deezer's 30 second preview, run through the same analysis.
+    Previewed,
     /// From the loudness the waveform recorded the last time the track played.
     Heard,
     Estimated,
@@ -53,6 +55,8 @@ pub struct PoolInput<'a> {
     pub fingerprints: &'a HashMap<String, Fingerprint>,
     /// Every stored raw energy, for normalizing against the library.
     pub library_energies: &'a [f32],
+    /// Preview measurements of tracks not fingerprinted, energy already on the fingerprint scale.
+    pub previews: &'a HashMap<String, Fingerprint>,
     /// Normalized loudness of tracks heard before but not fingerprinted, keyed by URI.
     pub heard: &'a HashMap<String, f64>,
 }
@@ -101,6 +105,7 @@ pub struct Draft {
     pub targets: Vec<f64>,
     pub confidence: f64,
     pub measured: usize,
+    pub previewed: usize,
     pub heard: usize,
     pub estimated: usize,
     pub unmeasured: usize,
@@ -226,7 +231,8 @@ impl Pool {
         let mut candidates: Vec<Candidate> = by_song
             .into_iter()
             .map(|(song, (affinity, track, reasons))| {
-                let fingerprint = input.fingerprints.get(&track.uri).cloned();
+                let measured = input.fingerprints.get(&track.uri);
+                let previewed = input.previews.get(&track.uri);
                 let mut playlists = memberships
                     .get(track.uri.as_str())
                     .cloned()
@@ -234,11 +240,13 @@ impl Pool {
                 playlists.sort_unstable();
                 playlists.dedup();
                 let heard = input.heard.get(&track.uri).copied();
-                let (energy, measure) = match (&fingerprint, heard) {
-                    (Some(found), _) => (normalize(found.energy), Measure::Measured),
-                    (None, Some(level)) => (level, Measure::Heard),
-                    (None, None) => (0.5, Measure::Unmeasured),
+                let (energy, measure) = match (measured, previewed, heard) {
+                    (Some(found), _, _) => (normalize(found.energy), Measure::Measured),
+                    (None, Some(preview), _) => (normalize(preview.energy), Measure::Previewed),
+                    (None, None, Some(level)) => (level, Measure::Heard),
+                    (None, None, None) => (0.5, Measure::Unmeasured),
                 };
+                let fingerprint = measured.or(previewed).cloned();
                 Candidate {
                     affinity,
                     energy,
@@ -283,10 +291,12 @@ impl Pool {
 fn estimate_energy(candidates: &mut [Candidate]) {
     let mut albums: HashMap<String, Vec<f64>> = HashMap::new();
     let mut artists: HashMap<String, Vec<f64>> = HashMap::new();
-    for candidate in candidates
-        .iter()
-        .filter(|c| matches!(c.measure, Measure::Measured | Measure::Heard))
-    {
+    for candidate in candidates.iter().filter(|c| {
+        matches!(
+            c.measure,
+            Measure::Measured | Measure::Previewed | Measure::Heard
+        )
+    }) {
         if let Some(album) = &candidate.album {
             albums
                 .entry(album.clone())
@@ -713,6 +723,7 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
                 format!("energy {energy}%, right on the arc")
             }
             Measure::Measured => format!("energy {energy}%, the arc wants {wanted}%"),
+            Measure::Previewed => format!("energy {energy}% from a preview"),
             Measure::Heard => format!("energy {energy}% from how loud it played last time"),
             Measure::Estimated => format!("energy ~{energy}%, guessed from related songs"),
             Measure::Unmeasured => "energy not learned yet".to_string(),
@@ -738,8 +749,9 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
         });
     }
     let count = |measure| slots.iter().filter(|slot| slot.measure == measure).count();
-    let (measured, heard, estimated, unmeasured) = (
+    let (measured, previewed, heard, estimated, unmeasured) = (
         count(Measure::Measured),
+        count(Measure::Previewed),
         count(Measure::Heard),
         count(Measure::Estimated),
         count(Measure::Unmeasured),
@@ -749,6 +761,7 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
     } else {
         let n = slots.len() as f64;
         let quality = (measured as f64
+            + 0.9 * previewed as f64
             + 0.8 * heard as f64
             + 0.6 * estimated as f64
             + 0.3 * unmeasured as f64)
@@ -768,6 +781,7 @@ pub fn assemble(pool: &Pool, recipe: &Recipe, uris: &[String], targets: &[f64]) 
         targets: targets.to_vec(),
         confidence,
         measured,
+        previewed,
         heard,
         estimated,
         unmeasured,
