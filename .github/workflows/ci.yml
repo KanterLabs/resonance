@@ -84,10 +84,6 @@ jobs:
   updater:
     name: Check updater and populated backups
     runs-on: homelab
-    concurrency:
-      group: resonance-homelab-heavy
-      queue: max
-      cancel-in-progress: false
     container:
       image: ubuntu:24.04
     steps:
@@ -161,10 +157,6 @@ jobs:
   fmt:
     name: Running `cargo fmt`
     runs-on: homelab
-    concurrency:
-      group: resonance-homelab-heavy
-      queue: max
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
       - name: Install rustup
