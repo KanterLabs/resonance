@@ -45,6 +45,7 @@ test("slot rows stay compact and the why line explains placement", () => {
   expect(row.detail).toBe("77 BPM · kept");
   expect(slotRow({ ...slot, pinned: false, measure: "estimated", tempo: null }).detail).toBe("est.");
   expect(slotRow({ ...slot, pinned: false, measure: "heard", tempo: null }).detail).toBe("heard");
+  expect(slotRow({ ...slot, pinned: false, measure: "previewed", tempo: 87 }).detail).toBe("87 BPM · prev.");
   expect(slotRow({ ...slot, pinned: false }).title).toBe("02 ▃ Teardrop");
   expect(whyLine(slot)).toBe("Why Teardrop: kept in place · shares 3 playlists with the seed · energy 0.38 ≈ target 0.40");
   const draft: ArcDraft = { recipe: normalizeRecipe(undefined), slots: [slot], targets: [0.4], confidence: 0.72, measured: 1, estimated: 0, unmeasured: 0, pool_size: 40, duration_ms: 330_000, notes: [], playlist_id: null };

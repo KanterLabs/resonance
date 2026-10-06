@@ -1,5 +1,5 @@
 import type { Page, Row, RpcApi } from "../../workspace/contracts.js";
-import { DEFAULT_PRESETS, normalizeRecipe, type ArcDraft, type ArcSlot, type ArcState, type Preset, type Recipe, type SeedRow } from "./model.js";
+import { DEFAULT_PRESETS, normalizeRecipe, type ArcDraft, type ArcSlot, type ArcState, type Coverage, type Preset, type Recipe, type SeedRow } from "./model.js";
 
 export type ListMode = "draft" | "alternatives" | "search";
 const MAX_SEEDS = 5;
@@ -20,15 +20,20 @@ export class ArcsController {
   status = "Loading arcs…";
   error = false;
   busy = false;
+  /** Songs measured from previews since the arc was built; a rebuild would use them. */
+  newlyMeasured = 0;
   private seedInfo = new Map<string, SeedRow>();
   private generation = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
+  private poller: ReturnType<typeof setTimeout> | undefined;
+  /** Library songs with a preview when the arc was built, or null before the first poll. */
+  private previewedAtBuild: number | null = null;
   private loaded = false;
   /** When the status line last changed, so a selection can take it over afterwards. */
   statusAt = 0;
 
-  constructor(private api: RpcApi, private onChange: () => void, private debounceMs = 400) {}
+  constructor(private api: RpcApi, private onChange: () => void, private debounceMs = 400, private pollMs = 10_000) {}
 
   seeds(): SeedRow[] {
     return this.recipe.seeds.map(uri => this.seedInfo.get(uri) ?? { uri, title: uri.split(":").pop() ?? uri, artists: [] });
@@ -70,6 +75,7 @@ export class ArcsController {
       if (this.disposed || request !== this.generation) return;
       this.accept(draft);
       this.mode = "draft";
+      this.watchPreviews();
       const seeds = this.seeds();
       this.say(`Built ${draft.slots.length} tracks from ${seeds[0]?.title ?? "your seeds"}${seeds.length > 1 ? ` and ${seeds.length - 1} more` : ""}`);
     } catch (reason) { if (request === this.generation) this.fail(reason); }
@@ -190,7 +196,31 @@ export class ArcsController {
     return true;
   }
 
-  dispose(): void { this.disposed = true; this.generation++; clearTimeout(this.timer); }
+  dispose(): void { this.disposed = true; this.generation++; clearTimeout(this.timer); clearTimeout(this.poller); }
+
+  /**
+   * While songs are being measured from previews in the background, check now and then how
+   * many more the library has, so the view can offer a rebuild instead of rebuilding under
+   * the listener.
+   */
+  private watchPreviews(): void {
+    clearTimeout(this.poller);
+    this.newlyMeasured = 0;
+    this.previewedAtBuild = null;
+    const generation = this.generation;
+    const poll = async () => {
+      if (this.disposed || generation !== this.generation) return;
+      let coverage: Coverage;
+      try { coverage = await this.api.call<Coverage>("builder.coverage"); } catch { return; }
+      if (this.disposed || generation !== this.generation || !coverage?.preview_lookup) return;
+      const previewed = Number(coverage.catalog_previewed) || 0;
+      if (this.previewedAtBuild === null) this.previewedAtBuild = previewed;
+      const more = Math.max(0, previewed - this.previewedAtBuild);
+      if (more !== this.newlyMeasured) { this.newlyMeasured = more; this.changed(); }
+      if ((Number(coverage.preview_pending) || 0) > 0) this.poller = setTimeout(() => { void poll(); }, this.pollMs);
+    };
+    void poll();
+  }
 
   private accept(draft: ArcDraft): void {
     this.draft = draft;

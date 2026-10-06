@@ -13,7 +13,7 @@ export class DemoArcs {
   dispatch(method: string, p: Params): unknown {
     switch (method) {
       case "builder.state": return { presets: DEFAULT_PRESETS, recipe: this.recipe ?? normalizeRecipe(undefined), draft: this.draft, fingerprinted: 0, current: this.seed(this.currentUri()), seeds: (this.recipe?.seeds ?? []).map(uri => this.seed(uri)).filter(Boolean), saved: [], demo: true };
-      case "builder.coverage": return { fingerprinted: 0, catalog_measured: 0, catalog_tracks: this.tracks().length, demo: true };
+      case "builder.coverage": return { fingerprinted: 0, previewed: 0, catalog_measured: 0, catalog_previewed: 0, catalog_tracks: this.tracks().length, preview_lookup: false, preview_pending: 0, demo: true };
       case "builder.build": {
         const recipe = normalizeRecipe(p.recipe);
         if (!recipe.seeds.length) { const current = this.currentUri(); if (current) recipe.seeds = [current]; }

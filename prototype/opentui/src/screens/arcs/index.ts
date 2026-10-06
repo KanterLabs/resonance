@@ -91,7 +91,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
     markers.visible = editing;
     markers.content = editing ? "".padEnd(GUTTER) + markerRow(recipe.curve, width, point, true) + `  point ${point + 1}/${recipe.curve.length} · energy ${Math.round(recipe.curve[point]!.energy * 100)}%` : "";
     const draft = controller.draft;
-    totals.content = draft ? summary(draft) : controller.busy ? "Building…" : "";
+    totals.content = draft ? summary(draft) + (controller.newlyMeasured ? ` · ${controller.newlyMeasured} more song${controller.newlyMeasured === 1 ? "" : "s"} measured, u refresh` : "") : controller.busy ? "Building…" : "";
     panel.height = height + 3 + (editing ? 1 : 0);
     for (const { node, tone } of texts) node.fg = colors[tone];
     for (const node of curveLines) node.fg = editing ? colors.accentBright : colors.accent;
@@ -164,6 +164,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
       case "+": case "=": controller.edit({ length: adjustLength(recipe.length, 1) }); return true;
       case "[": case "]": controller.edit({ discovery: Math.max(0, Math.min(100, recipe.discovery + (name === "]" ? 10 : -10))) }); return true;
       case "g": controller.remix(); return true;
+      case "u": void controller.build(); return true;
       case "c": void controller.useCurrent(); return true;
       case "/": returnTo = surface.selected()?.id; surface.prompt("Search for a starting song", "", value => { if (value.trim()) void controller.search(value.trim()); }); return true;
       case "backspace": case "delete": controller.removeSeed(); return true;

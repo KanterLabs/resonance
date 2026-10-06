@@ -203,3 +203,50 @@ test("controller ignores stale builds and keeps errors visible", async () => {
   expect(controller.status).toBe("Not enough cached tracks");
   controller.dispose();
 });
+
+test("songs measured from previews after a build are offered as a refresh, not rebuilt in", async () => {
+  const replies = [
+    { preview_lookup: true, catalog_previewed: 10, preview_pending: 40 },
+    { preview_lookup: true, catalog_previewed: 13, preview_pending: 37 },
+    { preview_lookup: true, catalog_previewed: 15, preview_pending: 0 },
+    { preview_lookup: true, catalog_previewed: 99, preview_pending: 0 },
+  ];
+  let polls = 0;
+  let builds = 0;
+  const controller = new ArcsController({ call<T>(method: string) {
+    if (method === "builder.coverage") return Promise.resolve(replies[Math.min(polls++, replies.length - 1)] as T);
+    if (method === "builder.build") { builds++; return Promise.resolve(draft() as T); }
+    return Promise.resolve({} as T);
+  } }, () => {}, 5, 5);
+  controller.recipe = { ...controller.recipe, seeds: ["spotify:track:t0"] };
+  await controller.build();
+  await tick(60);
+  expect(controller.newlyMeasured).toBe(5);
+  // Nothing is pending any more, so polling stopped and the arc was left alone.
+  expect(polls).toBe(3);
+  expect(builds).toBe(1);
+  controller.dispose();
+});
+
+test("arcs never poll for previews when lookups are off", async () => {
+  let polls = 0;
+  const controller = new ArcsController({ call<T>(method: string) {
+    if (method === "builder.coverage") { polls++; return Promise.resolve({ preview_lookup: false, preview_pending: 5 } as T); }
+    return Promise.resolve((method === "builder.build" ? draft() : {}) as T);
+  } }, () => {}, 5, 5);
+  controller.recipe = { ...controller.recipe, seeds: ["spotify:track:t0"] };
+  await controller.build();
+  await tick(40);
+  expect(polls).toBe(1);
+  expect(controller.newlyMeasured).toBe(0);
+  controller.dispose();
+});
+
+test("u rebuilds the arc with what has been measured since", async () => {
+  const w = await workspace();
+  try {
+    const before = w.builds().length;
+    w.keys.pressKey("u"); await tick(30);
+    expect(w.builds().length).toBe(before + 1);
+  } finally { w.cleanup(); }
+});

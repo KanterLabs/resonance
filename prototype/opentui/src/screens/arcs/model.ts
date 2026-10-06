@@ -14,7 +14,7 @@ export interface Recipe {
   rng_seed: number;
   preset?: string | null;
 }
-export type Measure = "measured" | "heard" | "estimated" | "unmeasured";
+export type Measure = "measured" | "previewed" | "heard" | "estimated" | "unmeasured";
 export interface ArcSlot {
   slot: number;
   uri: string;
@@ -41,6 +41,7 @@ export interface ArcDraft {
   targets: number[];
   confidence: number;
   measured: number;
+  previewed?: number;
   heard?: number;
   estimated: number;
   unmeasured: number;
@@ -50,6 +51,15 @@ export interface ArcDraft {
   playlist_id?: string | null;
 }
 export interface Preset { id: string; label: string; curve: CurvePoint[] }
+/** `builder.coverage`: how much of the cached library arcs have measured. */
+export interface Coverage {
+  fingerprinted?: number;
+  catalog_measured?: number;
+  catalog_previewed?: number;
+  catalog_tracks?: number;
+  preview_lookup?: boolean;
+  preview_pending?: number;
+}
 export interface SeedRow { uri: string; title: string; artists: string[] }
 export interface ArcState {
   presets?: Preset[];
@@ -166,7 +176,7 @@ export function formatDuration(ms: number): string {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
 }
 export function slotDetail(slot: ArcSlot): string {
-  const learned: Record<Measure, string> = { measured: "", heard: "heard", estimated: "est.", unmeasured: "new" };
+  const learned: Record<Measure, string> = { measured: "", previewed: "prev.", heard: "heard", estimated: "est.", unmeasured: "new" };
   const tags = [slot.tempo ? `${Math.round(slot.tempo)} BPM` : "", learned[slot.measure], slot.pinned ? "kept" : "", slot.seed ? "seed" : ""].filter(Boolean);
   return tags.join(" · ");
 }
