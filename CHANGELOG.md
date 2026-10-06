@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Learn each track's energy, tempo, brightness, and how it starts and ends by sampling the audio
   tap during normal playback. Only summary numbers are stored (`fingerprints.json` in the cache
   directory), never audio.
+- Measure songs that haven't been played from Deezer's free 30 second previews, found by ISRC or
+  by title and artist, so arcs know most of a library's energy from the start. A background
+  thread works through an arc's candidates first and then the rest of the library; Arc Studio
+  offers `u` to rebuild once more songs are measured. Only the numbers are kept
+  (`previews.json`). Turn it off with `arcs_preview_lookup = false`.
 
 ### Changed
 

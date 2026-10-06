@@ -120,7 +120,7 @@ real time.
 - `offline::analyze(mono: &[f32], rate: u32) -> Option<Vec<Sample>>`: `None` unless
   `rate == 44_100`. Feeds 1024-frame packets with timestamps `frames / rate`, and every 100 ms of
   audio reads level, 16 bands and tempo from the last 1024 frames into a `Sample`
-  (`position_ms` = offset, `elapsed_ms = 100`). This is what `/tmp/arcbench/bench.py::analyze`
+  (`position_ms` = offset, `elapsed_ms = 100`). This is what `scripts/arcbench/bench.py::analyze`
   does; it produced the benchmark numbers.
 - Tests: a synthesized 120 BPM bass click gives a tempo within 4% of 120 (the Python port read
   117); a steady tone gives a steady level; existing `audio_tap` tests pass untouched.
@@ -180,7 +180,7 @@ to `fingerprint::start`, `config.rs`.
 - What gets queued, deduplicated by URI and skipping anything fingerprinted or checked in the
   last 30 days:
   - on start, and after each library refresh, every track in `recommendations::catalog` at low
-    priority, so a library of ~1 200 tracks is measured in about 20 minutes of the app running;
+    priority, so a library of ~1 200 tracks is measured within about an hour of the app running;
   - on `builder::pool`, every non-`Measured` candidate at high priority by affinity, seeds first.
 - Save the store at most every 10 s while draining, and in `fingerprint::flush` on exit.
 - Config: `arcs_preview_lookup: Option<bool>` on `ConfigValues`, default true. When false the
@@ -209,7 +209,7 @@ Files: `solve.rs`, `builder/mod.rs`, `rpc/builder.rs`, the OpenTUI arcs screen, 
   it `prev.`, count it as known in coverage, update the demo data in `workspace/demo-arcs.ts`
   and `test/arcs-model.test.ts`. While a draft is open and `preview_pending > 0`, poll
   `builder.coverage` every 10 s; when more of the draft's tracks could now be previewed, show
-  `measured N more songs · r rebuild` rather than rebuilding under the user.
+  `N more songs measured, u refresh` rather than rebuilding under the user.
 - Docs: `doc/playlist-builder.md` (measures, the v2 background pass now shipped, risks) and
   `CHANGELOG.md`.
 
@@ -222,7 +222,7 @@ untangling a stack.
 
 ## Acceptance
 
-- With an empty `fingerprints.json` and a library of a few hundred tracks, 20 minutes of the app
+- With an empty `fingerprints.json` and a library of a few hundred tracks, half an hour of the app
   running previews most of them, and a fresh arc reports mostly `previewed` slots.
 - Rerunning the benchmark scripts against the Rust store reproduces the Python numbers within
   noise (ρ ≈ 0.85 against fingerprints, ~95% coverage).
@@ -235,3 +235,23 @@ untangling a stack.
 - ReccoBeats or other feature APIs (valence / mood). A possible later source, kept separate.
 - Full-track offline analysis through librespot.
 - Using previews for song maps or the waveform.
+
+## As built (2026-10-06)
+
+Where the implementation differs from the tasks above:
+
+- **ID3 tags:** Deezer's previews open with an ID3v2.4 tag declaring a size of zero, which
+  symphonia's probe rejects. `measure::without_id3` skips any leading ID3v2 tag before decoding.
+- **Beat detector warm-up:** the detector's running average starts from silence, so the first
+  seconds of any audio fire beats at its refractory rate (232 ms, read as 129 BPM). Live playback
+  soon outgrows that; a 30 s preview may not. `offline::analyze` plays the first 4 s into the
+  detector and forgets those beats before measuring. Live behaviour is unchanged.
+- **Refresh key:** `r` is already swap in Arc Studio, so a rebuild with new measurements is `u`.
+- **Misses** are stored without a Deezer id; `Lookup::NoPreview` does not carry one.
+- **Rust vs the Python benchmark:** on live previews the Rust energies sit a constant ~0.05 below
+  `bench.py`'s, which is ffmpeg's −3 dB downmix in the script, not a difference in analysis; the
+  Rust values match the tap. Seven benchmark tracks matched by plain search and measured in about
+  2–3 s each, download included.
+- **RPC:** `builder.coverage` also reports `previewed`, `catalog_previewed`, `preview_lookup` and
+  `preview_pending`; drafts report `previewed`.
+

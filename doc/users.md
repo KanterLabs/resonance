@@ -560,6 +560,7 @@ Possible configuration values are:
 | `shuffle`                       | Set default shuffle state                                      | `true`, `false`                                                                       | `false`             |
 | `repeat`                        | Set default repeat mode                                        | `"off"`, `"track"`, `"playlist"`                                                      | `"off"`             |
 | `radio_discovery`               | Set the local radio exploration level at startup               | `0` - `100`                                                                           | `50`                |
+| `arcs_preview_lookup`           | Let Arcs measure songs you haven't played from Deezer's 30 second previews. Sends song titles, artists and ISRCs to Deezer; only the measured numbers are kept, never audio | `true`, `false` | `true` |
 | `playback_state`                | Set default playback state                                     | `"Stopped"`, `"Paused"`, `"Playing"`, `"Default"`                                     | `"Paused"`          |
 | `library_tabs`                  | Tabs to show in library screen                                 | Array of `"tracks"`, `"albums"`, `"artists"`, `"playlists"`, `"podcasts"`, `"browse"` | All tabs            |
 | `cover_max_scale`<sup>[1]</sup> | Set maximum scaling ratio for cover art                        | Number                                                                                | No limit            |

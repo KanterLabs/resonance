@@ -84,11 +84,14 @@ keys for the current mode.
 | `Backspace` | Drop the last starting song |
 | `e` | Edit the curve: `←→` choose a point, `↑↓` raise or lower it, `Enter`/`Esc` done |
 | `s` | Save as a private playlist (later saves update that same playlist) |
+| `u` | Rebuild with songs measured since the arc was built |
 | `Esc` | Back to Now Playing |
 
 Rows mark each track's energy: a bar when it is known, `·` when it has not been learned yet, `◆`
 for kept tracks and `✦` for starting songs. Until most energies are known the summary says so:
-playing an arc is how it learns.
+playing an arc is how it learns. Songs not played yet are measured in the background from Deezer
+previews (see [Deezer previews](deezer-previews.md)); when more have been measured since the arc
+was built, the summary offers `u` to rebuild with them.
 
 Presets: **Rise & Fall** (default), **Steady Focus**, **Build to Peak**, **Wind Down**, **Run**
 (high, flat, with a short warm-up).
@@ -162,6 +165,15 @@ pub struct Fingerprint {
   with atomic temp-file writes. Cap: 50,000 entries, evicting the oldest `measured_at` first.
 - **Privacy:** the store holds no audio, only the summary numbers above.
 
+### Previewed energy
+
+Tracks without a fingerprint are measured from Deezer's 30 second previews by a background thread
+(`builder::preview`), through the same analysis the tap runs during playback. Previews are kept in
+`previews.json`, apart from fingerprints, and their energy is calibrated onto the listened scale
+before the library percentile. A preview has no intro or outro, so its edges score neutrally in
+transitions. The solver trusts measures in this order: measured, previewed, heard, estimated,
+unmeasured. Details and the benchmark behind it are in [deezer-previews.md](deezer-previews.md).
+
 ### Estimated energy for unmeasured tracks
 
 Early on most of the library is unmeasured. For an unmeasured candidate the solver estimates
@@ -223,7 +235,7 @@ clock.
 - **Tempo:** 1.0 within 4%, decaying to 0 at 15%, also accepting double and half time. Neutral
   0.5 when either tempo is unknown.
 - **Edge energy:** `1 - |a.outro_energy - b.intro_energy|`, so a fade-out leads into a soft
-  intro. Neutral when either is unmeasured.
+  intro. Neutral when either is unmeasured or measured from a preview.
 - **Brightness:** small weight on `1 - |a.brightness - b.brightness|`.
 - **Context:** a bonus when both tracks appear in the same user playlist (from `Catalog`).
 
@@ -340,7 +352,8 @@ OpenTUI (`bun test`):
 - **Living draft:** the draft refills a skipped slot during playback.
 - **Rebuild from description:** recreate an arc from a recipe token in a playlist description.
 - **Transition preview:** play the last and first 10 s of adjacent tracks back to back.
-- **Background fingerprint pass:** quietly measure high-value unmeasured candidates.
+- **Background fingerprint pass:** shipped as Deezer previews, see
+  [deezer-previews.md](deezer-previews.md).
 
 ## Risks
 
