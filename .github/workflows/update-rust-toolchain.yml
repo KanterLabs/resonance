@@ -9,7 +9,7 @@ jobs:
     name: "Update Rust Toolchain (rust-toolchain.toml)"
     runs-on: homelab
     concurrency:
-      group: resonance-homelab-heavy
+      group: resonance-homelab-heavy-primary
       queue: max
       cancel-in-progress: false
     steps:

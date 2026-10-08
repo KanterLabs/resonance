@@ -16,8 +16,10 @@ jobs:
   linux:
     name: Publish linux-x86_64
     runs-on: homelab
+    env:
+      CARGO_BUILD_JOBS: '3'
     concurrency:
-      group: resonance-homelab-heavy
+      group: resonance-homelab-heavy-primary
       queue: max
       cancel-in-progress: false
     container:
