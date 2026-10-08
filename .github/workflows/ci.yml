@@ -15,8 +15,13 @@ jobs:
   build-linux:
     name: Checking linux-x86_64
     runs-on: homelab
+    timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: '3'
+      # Ephemeral CI needs lean artifacts, not incremental/debugger state.
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
     concurrency:
       group: resonance-homelab-heavy-primary
       queue: max
@@ -54,7 +59,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-lean-v1-${{ hashFiles('**/Cargo.lock') }}
       - name: Install rustup
         shell: bash
         run: |
@@ -178,8 +183,13 @@ jobs:
     container:
       image: ubuntu:24.04
     runs-on: homelab
+    timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: '3'
+      # Ephemeral CI needs lean artifacts, not incremental/debugger state.
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
     concurrency:
       group: resonance-homelab-heavy-check
       queue: max
@@ -216,7 +226,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-clippy-lean-v1-${{ hashFiles('**/Cargo.lock') }}
       - name: Install rustup
         shell: bash
         run: |

@@ -37,9 +37,9 @@ env:
 
 concurrency:
   group: fedora-${{ github.ref }}
-  # A newer commit on main makes an in-flight build pointless; a tag build is
-  # a release asset and always runs to the end.
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  # Preserve assigned builds while measured runner profiles roll out.
+  queue: max
+  cancel-in-progress: false
 
 jobs:
   build:
