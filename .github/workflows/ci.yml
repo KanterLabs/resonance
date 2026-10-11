@@ -9,23 +9,25 @@ on:
 env:
   TERM: xterm
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # Build and test the x86_64 Linux target in a rootful container. The homelab
-  # runner intentionally disallows sudo on the host.
+  # Build and test x86_64 Linux in an explicit Ubuntu dependency container.
   build-linux:
     name: Checking linux-x86_64
-    runs-on: homelab-heavy
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      CARGO_BUILD_JOBS: '7'
+      CARGO_BUILD_JOBS: '4'
       # Ephemeral CI needs lean artifacts, not incremental/debugger state.
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
-    concurrency:
-      group: resonance-homelab-heavy-primary
-      queue: max
-      cancel-in-progress: false
     container:
       image: ubuntu:24.04
     steps:
@@ -54,12 +56,11 @@ jobs:
         name: Cache build data
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-lean-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ubuntu24-cargo-lean-v2-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', '.cargo/config.toml') }}
       - name: Install rustup
         shell: bash
         run: |
@@ -73,8 +74,6 @@ jobs:
         run: cargo build --locked
       - name: Running cargo test
         run: cargo test --locked
-      - name: Check Rust formatting
-        run: cargo fmt --all -- --check
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -90,7 +89,8 @@ jobs:
 
   updater:
     name: Check updater and populated backups
-    runs-on: homelab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     container:
       image: ubuntu:24.04
     steps:
@@ -109,10 +109,12 @@ jobs:
   build-native:
     name: Checking ${{ matrix.build_target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
+      max-parallel: 2
       matrix:
         include:
-          # The homelab runner pool is x86_64; retain a native hosted ARM runner for this target.
+          # Preserve native ARM coverage.
           - build_target: linux-arm64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
@@ -131,12 +133,11 @@ jobs:
         name: Cache build data
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', '.cargo/config.toml') }}
       - name: Install rustup
         if: runner.os != 'Windows'
         shell: bash
@@ -163,7 +164,8 @@ jobs:
   # Check Rust code formatting.
   fmt:
     name: Running `cargo fmt`
-    runs-on: homelab
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - name: Install rustup
@@ -182,18 +184,14 @@ jobs:
     name: Running `cargo clippy`
     container:
       image: ubuntu:24.04
-    runs-on: homelab-heavy
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      CARGO_BUILD_JOBS: '7'
+      CARGO_BUILD_JOBS: '4'
       # Ephemeral CI needs lean artifacts, not incremental/debugger state.
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_PROFILE_TEST_DEBUG: '0'
-    concurrency:
-      group: resonance-homelab-heavy-check
-      queue: max
-      cancel-in-progress: false
     steps:
       - name: Install Linux dependencies
         run: |
@@ -221,12 +219,11 @@ jobs:
         name: Cache build data
         with:
           path: |
-            ~/.cargo/bin/
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-clippy-lean-v1-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-ubuntu24-clippy-lean-v2-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', '.cargo/config.toml') }}
       - name: Install rustup
         shell: bash
         run: |

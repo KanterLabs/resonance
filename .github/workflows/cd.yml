@@ -12,16 +12,17 @@ env:
   CARGO_TERM_COLOR: always
   TERM: xterm
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   linux:
     name: Publish linux-x86_64
-    runs-on: homelab-heavy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
-      CARGO_BUILD_JOBS: '7'
-    concurrency:
-      group: resonance-homelab-heavy-primary
-      queue: max
-      cancel-in-progress: false
+      CARGO_BUILD_JOBS: '4'
     container:
       image: ubuntu:24.04
     steps:
@@ -79,6 +80,7 @@ jobs:
           name: resonance-linux-x86_64
           path: dist/*
           if-no-files-found: error
+          retention-days: 14
       - uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -89,10 +91,11 @@ jobs:
 
   native:
     name: Publish ${{ matrix.platform }}
-    # Native ARM, macOS, and Windows require an architecture/OS unavailable in
-    # the x86_64 Linux homelab pool. Only these targets use hosted runners.
+    # Preserve native ARM, Intel/ARM macOS, and Windows release builds.
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
+      max-parallel: 2
       fail-fast: false
       matrix:
         include:
@@ -166,6 +169,7 @@ jobs:
           name: resonance-${{ matrix.platform }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 14
       - uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
         with:

@@ -2,7 +2,7 @@ name: Fedora
 
 # Builds a Resonance binary against Fedora's own glibc and system libraries, which
 # the generic linux-x86_64 release asset cannot be relied on to match. Runs on the
-# KanterLabs homelab fleet: `homelab-heavy`, because this is a sustained Rust build.
+# standard hosted Ubuntu runner with an explicit Fedora build container.
 #
 # A binary built on Fedora N runs on N and newer, so build on the oldest Fedora
 # release you still need to run on and bump `fedora_version` as those go EOL.
@@ -20,6 +20,20 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "build.rs"
+      - "LICENSE"
+      - "README.md"
+      - "misc/**"
+      - "images/**"
+      - "Cargo.*"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "xtask/**"
+      - "prototype/opentui/**"
+      - "scripts/**"
+      - ".github/workflows/fedora.yml"
     tags:
       - "v*.*.*"
   workflow_dispatch:
@@ -37,20 +51,15 @@ env:
 
 concurrency:
   group: fedora-${{ github.ref }}
-  # Preserve assigned builds while measured runner profiles roll out.
-  queue: max
-  cancel-in-progress: false
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   build:
     name: Building for Fedora ${{ inputs.fedora_version || '43' }}
-    runs-on: homelab-heavy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     env:
-      CARGO_BUILD_JOBS: '7'
-    concurrency:
-      group: resonance-homelab-heavy-primary
-      queue: max
-      cancel-in-progress: false
+      CARGO_BUILD_JOBS: '4'
     permissions:
       contents: write
     container:
@@ -185,6 +194,7 @@ jobs:
           name: ${{ steps.name.outputs.asset }}
           path: target/${{ env.PROFILE }}/${{ steps.name.outputs.asset }}.*
           if-no-files-found: error
+          retention-days: ${{ startsWith(github.ref, 'refs/tags/') && 14 || 3 }}
 
       - name: Releasing assets
         if: startsWith(github.ref, 'refs/tags/')
