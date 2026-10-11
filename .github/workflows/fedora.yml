@@ -44,9 +44,9 @@ concurrency:
 jobs:
   build:
     name: Building for Fedora ${{ inputs.fedora_version || '43' }}
-    runs-on: homelab
+    runs-on: homelab-heavy
     env:
-      CARGO_BUILD_JOBS: '3'
+      CARGO_BUILD_JOBS: '7'
     concurrency:
       group: resonance-homelab-heavy-primary
       queue: max
