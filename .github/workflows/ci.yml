@@ -14,10 +14,10 @@ jobs:
   # runner intentionally disallows sudo on the host.
   build-linux:
     name: Checking linux-x86_64
-    runs-on: homelab
+    runs-on: homelab-heavy
     timeout-minutes: 30
     env:
-      CARGO_BUILD_JOBS: '3'
+      CARGO_BUILD_JOBS: '7'
       # Ephemeral CI needs lean artifacts, not incremental/debugger state.
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
@@ -182,10 +182,10 @@ jobs:
     name: Running `cargo clippy`
     container:
       image: ubuntu:24.04
-    runs-on: homelab
+    runs-on: homelab-heavy
     timeout-minutes: 30
     env:
-      CARGO_BUILD_JOBS: '3'
+      CARGO_BUILD_JOBS: '7'
       # Ephemeral CI needs lean artifacts, not incremental/debugger state.
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
