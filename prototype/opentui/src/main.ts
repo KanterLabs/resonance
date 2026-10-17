@@ -4,7 +4,7 @@ import { mountWorkspace } from "./workspace/app.js";
 import { WorkspaceClient, RpcError } from "./workspace/client.js";
 import { DemoApi } from "./workspace/demo.js";
 import { ROUTES, type Params, type Route, type RpcApi } from "./workspace/contracts.js";
-import { readReducedMotion, saveReducedMotion } from "./workspace/preferences.js";
+import { readNowPlayingStyle, readReducedMotion, saveNowPlayingStyle, saveReducedMotion } from "./workspace/preferences.js";
 import { commandForKey } from "./commands.js";
 import { parseStatus } from "./status.js";
 import { DEFAULT_THEME, isThemeName, paletteForTheme, type ThemeName } from "./theme.js";
@@ -29,7 +29,7 @@ Usage:
 Space play/pause · Shift+R radio · L appearance · : commands · q quit
 Ctrl+Left previous/restart · Ctrl+Right next · Ctrl+Up/Down volume ±5%
 Alt+Left/Right seek ±10 seconds · Ctrl+Z undo last skip
-Now Playing: / quick search · Enter play now · Ctrl+N next · Ctrl+E queue
+Now Playing: / quick search · Enter play now · Ctrl+N next · Ctrl+E queue · v turntable/classic
 Focused inputs capture these keys; Escape cancels or returns.
 `;
 export interface CliOptions { socket?: string; demo: boolean; smoke: boolean; theme?: ThemeName; route?: Route; reducedMotion?: boolean; debug?: string }
@@ -109,6 +109,8 @@ async function main(): Promise<void> {
     reducedMotion: parsed.reducedMotion ?? (parsed.demo ? false : readReducedMotion()),
     onThemeChange: parsed.demo ? undefined : value => { const saved = saveThemePreference(value); if (!saved.ok) throw new Error(saved.error); },
     onReducedMotionChange: parsed.demo ? undefined : saveReducedMotion,
+    nowPlayingStyle: parsed.demo ? undefined : readNowPlayingStyle(),
+    onNowPlayingStyleChange: parsed.demo ? undefined : saveNowPlayingStyle,
     onQuit: () => client?.close(),
   });
   const teardown = () => { if (timer) clearInterval(timer); app.dispose(); client?.close(); if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; } };

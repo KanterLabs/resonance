@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readReducedMotion, saveReducedMotion } from "../src/workspace/preferences.js";
+import { readNowPlayingStyle, readReducedMotion, saveNowPlayingStyle, saveReducedMotion } from "../src/workspace/preferences.js";
 
 function temporary(run: (path: string, directory: string) => void): void {
   const directory = mkdtempSync(join(tmpdir(), "resonance-workspace-preferences-"));
@@ -57,5 +57,18 @@ test("reduced motion reads reject unsupported schema versions and nonboolean val
     }
     writeFileSync(path, JSON.stringify({ reducedMotion: true, metadata: "legacy object" }));
     expect(readReducedMotion(path)).toBe(true);
+  });
+});
+
+test("the Now Playing style is remembered beside reduced motion", () => {
+  temporary(path => {
+    expect(readNowPlayingStyle(path)).toBeUndefined();
+    saveReducedMotion(true, path);
+    saveNowPlayingStyle("classic", path);
+    expect(readNowPlayingStyle(path)).toBe("classic");
+    expect(readReducedMotion(path)).toBe(true);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 1, reducedMotion: true, nowPlayingStyle: "classic" });
+    writeFileSync(path, JSON.stringify({ version: 1, nowPlayingStyle: "gramophone" }));
+    expect(readNowPlayingStyle(path)).toBeUndefined();
   });
 });

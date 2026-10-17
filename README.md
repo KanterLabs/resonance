@@ -146,8 +146,12 @@ In Now Playing, press **/** for quick search. Type a song or artist and select w
 **Enter** plays it now, **Ctrl+N** plays it next, and **Ctrl+E** adds it to the queue.
 **Esc** closes the popup. Search uses cached results first, without leaving Now Playing.
 
-Light/dark preferences and reduced motion are saved separately from Rust configuration. Now
-Playing centers the player beside an Up Next card on wide terminals and adapts to 80×24.
+Now Playing opens on a turntable drawn after the Braun PS 500: the cover turns on the label and the
+tonearm travels across the record as the song plays. Press **v** to switch to the classic player
+card and back; terminals too small for the deck show the classic player.
+
+Light/dark preferences, reduced motion and the Now Playing view are saved separately from Rust
+configuration. The classic player centers beside an Up Next card on wide terminals and adapts to 80×24.
 It displays real artwork from the existing cover cache and sampled audio bands when Rust supplies
 them; otherwise it shows playback progress. Missing artwork falls back to initials. See the
 [workspace guide](doc/opentui-prototype.md) for routes, controls, attachment, and debug logging.

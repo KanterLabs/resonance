@@ -2,16 +2,30 @@ import { readFileSync, mkdirSync, writeFileSync, renameSync, unlinkSync } from "
 import { dirname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { themeConfigPath } from "../theme-store.js";
+import type { NowPlayingStyle } from "./contracts.js";
 
 const path = () => join(dirname(themeConfigPath()), "opentui-workspace.json");
-export function readReducedMotion(configPath = path()): boolean {
+function readPreferences(configPath: string): Record<string, unknown> | null {
   try {
     const value = JSON.parse(readFileSync(configPath, "utf8"));
     return !!value && typeof value === "object" && !Array.isArray(value)
-      && (value.version === undefined || value.version === 1) && value.reducedMotion === true;
-  } catch { return false; }
+      && (value.version === undefined || value.version === 1) ? value : null;
+  } catch { return null; }
+}
+export function readReducedMotion(configPath = path()): boolean {
+  return readPreferences(configPath)?.reducedMotion === true;
 }
 export function saveReducedMotion(value: boolean, configPath = path()): void {
+  savePreferences({ reducedMotion: value }, configPath);
+}
+export function readNowPlayingStyle(configPath = path()): NowPlayingStyle | undefined {
+  const value = readPreferences(configPath)?.nowPlayingStyle;
+  return value === "turntable" || value === "classic" ? value : undefined;
+}
+export function saveNowPlayingStyle(value: NowPlayingStyle, configPath = path()): void {
+  savePreferences({ nowPlayingStyle: value }, configPath);
+}
+function savePreferences(patch: Record<string, unknown>, configPath: string): void {
   let existing: Record<string, unknown> = {};
   try {
     const decoded = JSON.parse(readFileSync(configPath, "utf8"));
@@ -21,7 +35,7 @@ export function saveReducedMotion(value: boolean, configPath = path()): void {
   mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 });
   const temporary = `${configPath}.${randomBytes(8).toString("hex")}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify({ ...existing, version: 1, reducedMotion: value }) + "\n", { mode: 0o600, flag: "wx" });
+    writeFileSync(temporary, JSON.stringify({ ...existing, version: 1, ...patch }) + "\n", { mode: 0o600, flag: "wx" });
     renameSync(temporary, configPath);
   } finally { try { unlinkSync(temporary); } catch {} }
 }

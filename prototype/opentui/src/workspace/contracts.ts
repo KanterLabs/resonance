@@ -39,6 +39,8 @@ export interface ScreenKey {
   super?: boolean;
   hyper?: boolean;
 }
+/** Now Playing draws a Braun-style turntable, or the original player card. */
+export type NowPlayingStyle = "turntable" | "classic";
 export interface ScreenContext {
   renderer: CliRenderer;
   api: RpcApi;
@@ -46,6 +48,9 @@ export interface ScreenContext {
   setTheme(theme: ThemeName): void;
   reducedMotion(): boolean;
   setReducedMotion(value: boolean): void;
+  /** Optional so contexts without the preference keep the classic card. */
+  nowPlayingStyle?(): NowPlayingStyle;
+  setNowPlayingStyle?(style: NowPlayingStyle): void;
   status(): ParsedStatus | null;
   onStatus(listener: (status: ParsedStatus) => void): () => void;
   navigate(route: Route, params?: Params): void;

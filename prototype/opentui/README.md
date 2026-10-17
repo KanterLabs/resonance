@@ -61,7 +61,11 @@ artist, use **↑/↓** to select, then **Enter** to play now, **Ctrl+N** to pla
 stay usable if a background refresh fails. The popup also has clickable action buttons.
 
 Live sessions save light/dark and reduced-motion preferences separately from Rust settings. Demo
-previews do not save them. Now Playing groups artwork, metadata and controls in a centered player
+previews do not save them. Now Playing opens on a Braun-style turntable (`turntable.ts`): the
+cover is printed on the label and turns with the playhead, the tonearm's position on the record
+is the progress, and a short spec sheet lists the track, volume, repeat/shuffle and the next song.
+**v** switches to the classic player and the choice is saved beside reduced motion. Windows that
+can't fit the deck use the classic player, which groups artwork, metadata and controls in a centered player
 card, with an Up Next card on wide terminals. Real cover images use Rust's existing disk cache;
 only a missing cover needs a CDN download, without a Spotify Web API call. Initials remain the
 fallback when an image is unavailable. Sampled audio drives the spectrum; without samples the

@@ -1,7 +1,7 @@
 import { BoxRenderable, TextAttributes, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
 import { paletteForTheme, type ThemeName } from "../theme.js";
 import { formatTime, type ParsedStatus } from "../status.js";
-import { ROUTES, type Params, type Route, type RpcApi, type Screen, type ScreenContext, type ScreenFactory } from "./contracts.js";
+import { ROUTES, type Params, type NowPlayingStyle, type Route, type RpcApi, type Screen, type ScreenContext, type ScreenFactory } from "./contracts.js";
 import { createNowPlayingScreen } from "../screens/now-playing/index.js";
 import { createQueueScreen } from "../screens/queue/index.js";
 import { createLibraryScreen } from "../screens/library/index.js";
@@ -26,11 +26,14 @@ export interface WorkspaceOptions {
   route?: Route;
   onThemeChange?(theme: ThemeName): void;
   onReducedMotionChange?(value: boolean): void;
+  nowPlayingStyle?: NowPlayingStyle;
+  onNowPlayingStyleChange?(style: NowPlayingStyle): void;
   onQuit?(): void;
 }
 export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions) {
   let theme = options.theme;
   let reducedMotion = options.reducedMotion ?? false;
+  let nowPlayingStyle: NowPlayingStyle = options.nowPlayingStyle ?? "turntable";
   let status: ParsedStatus | null = null;
   let screen: Screen | undefined;
   let route: Route = options.route ?? "now-playing";
@@ -77,6 +80,12 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
       try { options.onReducedMotionChange?.(value); } catch (error) { notify(`Motion preference saving failed: ${error instanceof Error ? error.message : error}`); }
       // Re-mount to release any screen animation timer immediately.
       navigate(route);
+    },
+    nowPlayingStyle: () => nowPlayingStyle,
+    setNowPlayingStyle(style) {
+      if (disposed || style === nowPlayingStyle) return;
+      nowPlayingStyle = style;
+      try { options.onNowPlayingStyleChange?.(style); } catch (error) { notify(`Now Playing style saving failed: ${error instanceof Error ? error.message : error}`); }
     },
     status: () => status, onStatus(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     navigate, notify,

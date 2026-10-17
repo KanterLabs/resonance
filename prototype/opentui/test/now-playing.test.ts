@@ -3,7 +3,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { createNowPlayingScreen, ambientProgress, artworkLines, audioSpectrum, type Artwork } from "../src/screens/now-playing/index.js";
 import { mountWorkspace } from "../src/workspace/app.js";
 import { demoStatus, type ParsedStatus } from "../src/status.js";
-import type { ScreenContext, Params } from "../src/workspace/contracts.js";
+import type { NowPlayingStyle, ScreenContext, Params } from "../src/workspace/contracts.js";
 import { testPng } from "./helpers/png.js";
 import type { ImageRenderable } from "@opentui/core";
 
@@ -18,6 +18,8 @@ interface FixtureOptions {
   artwork?: ArtworkResolver;
   respond?: RpcResponder;
   nativeArtwork?: boolean | "sixel";
+  /** Offer the Now Playing style preference, as the workspace does. */
+  style?: NowPlayingStyle;
 }
 
 interface Deferred<T> {
@@ -85,6 +87,8 @@ async function fixtureCtx(options: FixtureOptions = {}) {
   let fail = false;
   let reduced = options.reducedMotion ?? true;
   let unsubscribed = false;
+  let style = options.style;
+  const styles: NowPlayingStyle[] = [];
   const ctx: ScreenContext = {
     renderer: setup.renderer,
     api: {
@@ -106,6 +110,7 @@ async function fixtureCtx(options: FixtureOptions = {}) {
     onStatus(value) { listener = value; return () => { listener = undefined; unsubscribed = true; }; },
     navigate() {},
     notify(message) { notices.push(message); },
+    ...(style ? { nowPlayingStyle: () => style!, setNowPlayingStyle(value: NowPlayingStyle) { style = value; styles.push(value); } } : {}),
   };
   const screen = createNowPlayingScreen(ctx);
   setup.renderer.root.add(screen.root);
@@ -114,6 +119,7 @@ async function fixtureCtx(options: FixtureOptions = {}) {
     screen,
     calls,
     notices,
+    styles,
     motion(value: boolean) { reduced = value; screen.refresh(); },
     update(value: ParsedStatus) { status = value; listener?.(value); },
     fail() { fail = true; },
@@ -565,6 +571,7 @@ test("full workspace at 80x24 keeps Now Playing controls within the terminal bou
   const app = mountWorkspace(setup.renderer, {
     theme: "light",
     reducedMotion: true,
+    nowPlayingStyle: "classic",
     api: { async call<T>(method: string, params?: Params) {
       if (method === "player.artwork") return unavailableArtwork(params) as T;
       return (method === "player.status" ? { repeat: "off", shuffle: false } : {}) as T;
@@ -707,4 +714,76 @@ test("Play, Save, and Radio pulse for keyboard and mouse actions and reduced mot
     expect(f.calls).toHaveLength(callCount);
     expect(nativeRgb(f.renderer, save.x + 5, save.y, "bg")).toEqual([247, 250, 255]);
   } finally { f.close(); clock.mockRestore(); }
+});
+
+test("the turntable view draws the deck with a spec sheet and v switches styles", async () => {
+  const f = await fixtureCtx({ width: 120, height: 34, style: "turntable", artwork: params => coloredArtwork(String(params.uri), Number(params.width), Number(params.height)) });
+  try {
+    await settle(f);
+    const deck = f.screen.root.findDescendantById("np-turntable")!;
+    expect(deck.visible).toBe(true);
+    expect(f.screen.root.findDescendantById("np-columns")!.visible).toBe(false);
+    expect(f.screen.root.findDescendantById("np-turntable-row-0")).toBeTruthy();
+    const frame = f.captureCharFrame();
+    expect(frame).toContain("RS 33");
+    expect(frame).toContain("volume");
+    expect(frame).toContain("v classic");
+    expect(frame).toContain("▀");
+    expect(f.calls.some(call => call.method === "player.artwork" && call.params?.width === 20 && call.params?.height === 10)).toBe(true);
+
+    f.screen.handleKey({ name: "v" });
+    await settle(f);
+    expect(deck.visible).toBe(false);
+    expect(f.screen.root.findDescendantById("np-columns")!.visible).toBe(true);
+    expect(f.styles).toEqual(["classic"]);
+    expect(f.notices.at(-1)).toContain("Classic player");
+
+    f.screen.handleKey({ name: "v" });
+    await settle(f);
+    expect(deck.visible).toBe(true);
+    expect(f.styles).toEqual(["classic", "turntable"]);
+  } finally { f.close(); }
+});
+
+test("a window too small for the turntable keeps the classic player", async () => {
+  const f = await fixtureCtx({ width: 70, height: 20, style: "turntable" });
+  try {
+    await settle(f);
+    expect(f.screen.root.findDescendantById("np-turntable")!.visible).toBe(false);
+    expect(f.screen.root.findDescendantById("np-columns")!.visible).toBe(true);
+  } finally { f.close(); }
+});
+
+test("contexts without the style preference keep the classic player", async () => {
+  const f = await fixtureCtx({ width: 120, height: 34 });
+  try {
+    await settle(f);
+    expect(f.screen.root.findDescendantById("np-turntable")!.visible).toBe(false);
+    expect(f.screen.root.findDescendantById("np-columns")!.visible).toBe(true);
+  } finally { f.close(); }
+});
+
+test("the workspace opens on the turntable, which fits inside 80x24", async () => {
+  const setup = await createTestRenderer({ width: 80, height: 24 });
+  const app = mountWorkspace(setup.renderer, {
+    theme: "dark",
+    reducedMotion: true,
+    api: { async call<T>(method: string, params?: Params) {
+      if (method === "player.artwork") return unavailableArtwork(params) as T;
+      return (method === "player.status" ? { repeat: "off", shuffle: false } : {}) as T;
+    } },
+  });
+  app.setStatus(trackStatus());
+  try {
+    await setup.renderOnce(); await setup.renderOnce();
+    const deck = setup.renderer.root.findDescendantById("np-turntable")!;
+    expect(deck.visible).toBe(true);
+    expect(setup.captureCharFrame()).toContain("The Colour of Air");
+    for (const node of [deck, setup.renderer.root.findDescendantById("np-turntable-spec")!]) {
+      expect(node.x).toBeGreaterThanOrEqual(0);
+      expect(node.y).toBeGreaterThanOrEqual(0);
+      expect(node.x + node.width).toBeLessThanOrEqual(80);
+      expect(node.y + node.height).toBeLessThanOrEqual(24);
+    }
+  } finally { app.dispose(); setup.renderer.destroy(); }
 });
