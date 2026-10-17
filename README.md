@@ -136,7 +136,9 @@ configuration and cache paths continue to be used when present.
 
 The workspace includes Now Playing, Queue, Library, Search, Browse, Playlists, Podcasts, Radio,
 Arcs, Settings, Help, and Cast. Use **0–9**, **B**, and **?** to switch screens, **Space** to play/pause,
-**Shift+R** to start radio, **L** to change appearance, **:** for commands, and **q** or **Ctrl+C**
+**Ctrl+Right Arrow** to skip to the next song, **Ctrl+Left Arrow** to restart (after three seconds) or go to the previous song,
+**Ctrl+Up/Down** to adjust volume by 5%, **Alt+Left/Right** to seek by 10 seconds, and **Ctrl+Z** to undo the last skip.
+Use **Shift+R** to start radio, **L** to change appearance, **:** for commands, and **q** or **Ctrl+C**
 to quit. Focused text inputs capture normal typing. **Esc** cancels a prompt or returns to Now
 Playing. Each screen shows its own action keys.
 

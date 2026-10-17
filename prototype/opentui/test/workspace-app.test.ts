@@ -6,6 +6,85 @@ import { ROUTES, type Page } from "../src/workspace/contracts.js";
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 10));
 
+test("global playback shortcuts dispatch exact actions from list screens and preserve local arrows", async () => {
+  // Kitty carries Shift on Ctrl+letters; classic terminal control bytes cannot.
+  const native = await createTestRenderer({ width: 80, height: 24, kittyKeyboard: true });
+  const demo = new DemoApi();
+  const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
+  const app = mountWorkspace(native.renderer, { api: { async call<T>(method: string, params?: Record<string, unknown>) {
+    calls.push({ method, params });
+    return method === "player.action" ? {} as T : demo.call<T>(method, params);
+  } }, theme: "light", reducedMotion: true, route: "queue" });
+  try {
+    app.setStatus(demo.status); await settle();
+    native.mockInput.pressArrow("left", { ctrl: true });
+    native.mockInput.pressArrow("right", { ctrl: true });
+    native.mockInput.pressArrow("up", { ctrl: true });
+    native.mockInput.pressArrow("down", { ctrl: true });
+    native.mockInput.pressArrow("left", { meta: true });
+    native.mockInput.pressArrow("right", { meta: true });
+    native.mockInput.pressKey("z", { ctrl: true });
+    await settle();
+    expect(calls.filter(call => call.method === "player.action").map(call => call.params)).toEqual([
+      { action: "previous_or_restart" }, { action: "next" },
+      { action: "volume_relative", value: 5 }, { action: "volume_relative", value: -5 },
+      { action: "seek_relative", value: -10_000 }, { action: "seek_relative", value: 10_000 }, { action: "undo_skip" },
+    ]);
+    calls.length = 0;
+    native.mockInput.pressArrow("down");
+    for (const direction of ["left", "right", "up", "down"] as const) {
+      native.mockInput.pressArrow(direction, { ctrl: true, shift: true });
+      native.mockInput.pressArrow(direction, { ctrl: true, meta: true });
+      native.mockInput.pressArrow(direction, { meta: true, shift: true });
+      native.mockInput.pressArrow(direction, { ctrl: true, super: true });
+      native.mockInput.pressArrow(direction, { meta: true, hyper: true });
+    }
+    native.mockInput.pressKey("z", { ctrl: true, shift: true });
+    await settle();
+    expect(calls.filter(call => call.method === "player.action")).toEqual([]);
+    app.setBindings({ "Ctrl+Right": "focus library", "Alt+Left": "focus browse", "Ctrl+z": "focus queue" });
+    native.mockInput.pressArrow("right", { ctrl: true }); expect(app.route).toBe("library");
+    native.mockInput.pressArrow("left", { meta: true }); expect(app.route).toBe("browse");
+    native.mockInput.pressKey("z", { ctrl: true }); expect(app.route).toBe("queue");
+    expect(calls.filter(call => call.method === "player.action")).toEqual([]);
+    await native.renderOnce();
+    expect(native.captureCharFrame()).toContain("Ctrl+Z undo");
+    native.resize(60, 24); await native.renderOnce();
+    expect(native.captureCharFrame()).toContain("^Z undo");
+    app.setConnection(false, "Engine disconnected"); await native.renderOnce();
+    expect(native.captureCharFrame()).toContain("Engine disconnected");
+    app.setConnection(true, "Connected"); await native.renderOnce();
+    expect(native.captureCharFrame()).toContain("^Z undo");
+  } finally { app.dispose(); native.renderer.destroy(); }
+});
+
+test("playback shortcuts and their custom bindings stay inside focused text editors", async () => {
+  const native = await createTestRenderer({ width: 80, height: 24 });
+  const demo = new DemoApi();
+  const calls: string[] = [];
+  const app = mountWorkspace(native.renderer, { api: { async call<T>(method: string, params?: Record<string, unknown>) {
+    calls.push(method); return demo.call<T>(method, params);
+  } }, theme: "light", reducedMotion: true });
+  try {
+    app.setStatus(demo.status);
+    app.setBindings({ "Ctrl+Right": "focus queue", "Ctrl+z": "focus library" });
+    for (const editor of ["popup", "search", "command"] as const) {
+      app.navigate(editor === "search" ? "search" : "now-playing");
+      if (editor !== "search") await native.mockInput.typeText(editor === "popup" ? "/" : ":");
+      await settle();
+      const route = app.route;
+      calls.length = 0;
+      for (const direction of ["left", "right", "up", "down"] as const) native.mockInput.pressArrow(direction, { ctrl: true });
+      for (const direction of ["left", "right"] as const) native.mockInput.pressArrow(direction, { meta: true });
+      native.mockInput.pressKey("z", { ctrl: true });
+      await settle();
+      expect(app.route).toBe(route);
+      expect(calls).not.toContain("player.action");
+      expect(calls).not.toContain("settings.action");
+    }
+  } finally { app.dispose(); native.renderer.destroy(); }
+});
+
 test("Now Playing popup captures route, theme, configured binding and quit letters until Escape", async () => {
   const native = await createTestRenderer({ width: 80, height: 24 });
   const api = new DemoApi();

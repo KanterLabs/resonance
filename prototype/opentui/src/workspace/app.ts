@@ -14,7 +14,7 @@ import { createArcsScreen } from "../screens/arcs/index.js";
 import { createSettingsScreen } from "../screens/settings/index.js";
 import { createHelpScreen } from "../screens/help/index.js";
 import { createCastScreen } from "../screens/cast/index.js";
-import { keyBindingName, routeForCommand, WORKSPACE_BINDINGS } from "./bindings.js";
+import { keyBindingName, PLAYBACK_SHORTCUTS, routeForCommand, WORKSPACE_BINDINGS } from "./bindings.js";
 
 const FACTORIES: Record<Route, ScreenFactory> = { "now-playing": createNowPlayingScreen, queue: createQueueScreen, library: createLibraryScreen, search: createSearchScreen, browse: createBrowseScreen, playlists: createPlaylistsScreen, podcasts: createPodcastsScreen, radio: createRadioScreen, arcs: createArcsScreen, settings: createSettingsScreen, help: createHelpScreen, cast: createCastScreen };
 const SHORTCUTS: Record<string, Route> = { "1": "now-playing", "2": "queue", "3": "library", "4": "search", "5": "playlists", "6": "podcasts", "7": "radio", "8": "settings", "9": "cast", "0": "arcs", b: "browse", "?": "help" };
@@ -36,6 +36,7 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
   let route: Route = options.route ?? "now-playing";
   let disposed = false;
   let connection = "Connecting…";
+  let connectionProblem = "";
   let noticeText = "";
   let receivedAt = Date.now();
   let lastNoticeId = 0;
@@ -119,7 +120,10 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
     const position = status?.prototype?.position_ms ?? (status?.mode.kind === "paused" ? status.mode.positionMs : 0);
     const elapsed = position + (playing ? Math.max(0, Date.now() - receivedAt) : 0);
     footer.content = `${playing ? "▶" : "Ⅱ"} ${title}  ${formatTime(Math.min(playable?.duration ?? 0, elapsed))}/${formatTime(playable?.duration ?? 0)}  · Vol ${status?.prototype?.volume_percent ?? "—"}%`;
-    notice.content = noticeText || `${connection} · Space play/pause · Shift+R radio · : commands · q quit`;
+    const hints = renderer.width < 72
+      ? "Ctrl+←/→ track ↑/↓ vol · Alt+←/→ seek · ^Z undo · ?"
+      : "Ctrl+←/→ prev/next · Ctrl+↑/↓ vol · Alt+←/→ seek · Ctrl+Z undo · ? help";
+    notice.content = noticeText || connectionProblem || (renderer.width >= 120 ? `${hints} · Space pause · : commands · q quit · ${connection}` : hints);
   }
   function onKey(key: KeyEvent) {
     if (disposed) return;
@@ -130,6 +134,11 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
     if (!wasEditing) {
       const custom = customBindings[keyBindingName(key)];
       if (custom) { void command(custom).catch(error => notify(error instanceof Error ? error.message : String(error))); key.preventDefault(); return; }
+      const playback = PLAYBACK_SHORTCUTS[keyBindingName(key)];
+      if (playback) {
+        void action("player.action", playback);
+        key.preventDefault(); return;
+      }
     }
     if (!wasEditing && !key.ctrl && !key.meta) {
       if (SHORTCUTS[name]) { navigate(SHORTCUTS[name]); key.preventDefault(); return; }
@@ -158,6 +167,7 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
     const available = Math.max(1, Math.min(136, renderer.width) - 4);
     const total = tabs.reduce((sum, tab) => sum + tab.tab.width, 0) + Math.max(0, tabs.length - 1);
     nav.height = total <= available ? 1 : 3;
+    renderFooter();
     renderer.requestRender();
   }
   const timer = setInterval(() => { if (status?.mode.kind === "playing") { renderFooter(); renderer.requestRender(); } }, 1000);
@@ -170,7 +180,7 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
         ? Object.fromEntries(Object.entries(bindings).filter((entry): entry is [string, string] => typeof entry[1] === "string")) : {};
     },
     bindings() { return { ...WORKSPACE_BINDINGS, ...customBindings }; },
-    setConnection(connected: boolean, message: string) { if (disposed) return; connection = connected ? "Live engine" : message; renderFooter(); },
+    setConnection(connected: boolean, message: string) { if (disposed) return; connection = connected ? "Live engine" : message; connectionProblem = connected ? "" : message; renderFooter(); },
     setStatus(next: ParsedStatus) {
       if (disposed) return; status = next; receivedAt = Date.now();
       for (const entry of next.notifications ?? []) {

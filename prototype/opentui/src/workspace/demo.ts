@@ -20,6 +20,7 @@ export class DemoApi implements RpcApi {
   private repeat = "off";
   private shuffled = false;
   private played = 0;
+  private undoSkip: { currentId: string; playable: Playable; mode: ParsedStatus["mode"]; position: number; token: number; revision: number } | null = null;
   private radioSeed: Track | null = null;
   private values: Params = { volume: 68, repeat: "off", shuffle: false, demo: true, source, logged_in: true };
   private tracks: Row[] = DEMO_TRACKS.map(track => ({ id: track.id!, kind: "track", title: track.title, subtitle: track.artists.join(" · "), detail: track.album, uri: `spotify:track:${track.id}`, duration_ms: track.duration, saved: true }));
@@ -161,17 +162,38 @@ export class DemoApi implements RpcApi {
     const action = string(p, "action"); const proto = this.status.prototype!;
     switch (action) {
       case "play_pause": this.status.mode = this.status.mode.kind === "playing" ? { kind: "paused", positionMs: proto.position_ms } : { kind: "playing", startedAtMs: Date.now() - proto.position_ms }; break;
-      case "stop": this.status.mode = { kind: "stopped" }; proto.position_ms = 0; break;
-      case "next": this.next(1); break;
+      case "stop": this.status.mode = { kind: "stopped" }; proto.position_ms = 0; this.undoSkip = null; break;
+      case "next": {
+        const before = this.status.playable ? { currentId: this.currentId, playable: clone(this.status.playable), mode: clone(this.status.mode), position: proto.position_ms } : null;
+        const token = this.played;
+        this.next(1);
+        this.undoSkip = before && this.played !== token ? { ...before, token: this.played, revision: this.revision } : null;
+        break;
+      }
       case "previous": this.next(-1); break;
+      case "previous_or_restart": if (proto.position_ms > 3_000) this.seek(0); else this.next(-1); break;
+      case "undo_skip": {
+        const undo = this.undoSkip;
+        if (!undo || undo.token !== this.played || undo.revision !== this.revision) fail("invalid_params", "No recent skip to undo; playback or queue may have changed");
+        this.currentId = undo.currentId; this.status.playable = undo.playable; proto.position_ms = undo.position;
+        this.status.mode = undo.mode.kind === "playing" ? { kind: "playing", startedAtMs: Date.now() - undo.position } : undo.mode;
+        this.played++; this.undoSkip = null;
+        break;
+      }
       case "play": { const items = this.byUri(string(p, "uri")); const entries = this.entries(items); this.queue = entries; this.revision++; if (entries[0]) this.play(entries[0]); break; }
-      case "seek": { const value = number(p, "value"); if (value < 0) fail("invalid_params", "Seek position must be nonnegative"); proto.position_ms = Math.min(value, this.status.playable?.duration ?? 0); if (this.status.mode.kind === "paused") this.status.mode.positionMs = proto.position_ms; break; }
+      case "seek": { const value = number(p, "value"); if (value < 0) fail("invalid_params", "Seek position must be nonnegative"); this.seek(value); break; }
+      case "seek_relative": this.seek(proto.position_ms + number(p, "value")); break;
       case "volume": { const value = number(p, "value"); if (value < 0 || value > 100) fail("invalid_params", "Volume must be 0–100"); proto.volume_percent = value; this.values.volume = value; break; }
+      case "volume_relative": { const value = Math.max(0, Math.min(100, proto.volume_percent + number(p, "value"))); proto.volume_percent = value; this.values.volume = value; break; }
       case "repeat": { const value = p.value ?? (this.repeat === "off" ? "all" : this.repeat === "all" ? "track" : "off"); if (!["off", "all", "track"].includes(value as string)) fail("invalid_params", "Invalid repeat mode"); this.values.repeat = this.repeat = value as string; break; }
       case "shuffle": if (p.value !== undefined && typeof p.value !== "boolean") fail("invalid_params", "Shuffle value must be boolean"); this.values.shuffle = this.shuffled = p.value === undefined ? !this.shuffled : p.value as boolean; break;
       default: fail("invalid_params", "Unsupported player action");
     }
     this.publish(); return { source, status: this.status, repeat: this.repeat, shuffle: this.shuffled };
+  }
+  private seek(position: number): void {
+    this.status.prototype!.position_ms = Math.max(0, Math.min(position, this.status.playable?.duration ?? 0));
+    if (this.status.mode.kind === "paused") this.status.mode.positionMs = this.status.prototype!.position_ms;
   }
   private queueAction(p: Params): unknown {
     const action = string(p, "action");

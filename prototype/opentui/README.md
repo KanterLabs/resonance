@@ -47,8 +47,12 @@ closes independently; it never automatically reconnects after losing the origina
 
 Use 1–9 for Now Playing, Queue, Library, Search, Playlists, Podcasts, Radio, Settings, and Cast;
 B for Browse and ? for Help. Space toggles playback, Shift+R starts radio, L changes appearance,
-: opens commands, and q/F5/Ctrl+C quits. Esc cancels prompts or returns to Now Playing. Focused
-inputs capture text; individual screens show their action keys. Lists support keyboard navigation,
+: opens commands, and q/F5/Ctrl+C quits. Esc cancels prompts or returns to Now Playing.
+Ctrl+Left restarts after three seconds or plays the previous song; Ctrl+Right skips next.
+Ctrl+Up/Down adjusts volume by 5%, Alt+Left/Right seeks by 10 seconds, and Ctrl+Z undoes
+the last manual skip, restoring its position and pause state. Queue or playback changes
+can make undo unavailable. Custom bindings override these defaults. Focused
+inputs capture text and playback shortcuts; individual screens show their action keys. Lists support keyboard navigation,
 mouse selection and double-click activation.
 
 In Now Playing, **/** opens a quick-search popup while playback continues. Type a song or

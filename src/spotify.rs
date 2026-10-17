@@ -148,6 +148,13 @@ impl Spotify {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn capture_commands_for_test(&self) -> mpsc::UnboundedReceiver<WorkerCommand> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        *self.channel.write().unwrap() = Some(tx);
+        rx
+    }
+
     /// The tap on the playback sink, which the visualizer reads its spectrum from.
     pub fn audio_tap(&self) -> Arc<AudioTap> {
         self.tap.clone()
@@ -503,6 +510,17 @@ impl Spotify {
     /// Seek in the currently played [Playable] played by the [Player].
     pub fn seek(&self, position_ms: u32) {
         self.send_worker(WorkerCommand::Seek(position_ms));
+        // Keep consecutive relative seeks and restart/previous presses coherent
+        // while the playback worker acknowledges the new position.
+        let position = Duration::from_millis(u64::from(position_ms));
+        match self.get_current_status() {
+            PlayerEvent::Paused(_) => self.update_status(PlayerEvent::Paused(position)),
+            PlayerEvent::Playing(_) => {
+                self.set_elapsed(Some(position));
+                self.set_since(Some(SystemTime::now()));
+            }
+            _ => {}
+        }
         #[cfg(feature = "mpris")]
         self.notify_seeked(position_ms);
     }

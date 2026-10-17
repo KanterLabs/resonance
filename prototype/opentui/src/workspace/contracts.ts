@@ -36,6 +36,8 @@ export interface ScreenKey {
   ctrl?: boolean;
   meta?: boolean;
   shift?: boolean;
+  super?: boolean;
+  hyper?: boolean;
 }
 export interface ScreenContext {
   renderer: CliRenderer;
@@ -66,7 +68,7 @@ export type ScreenFactory = (context: ScreenContext, params?: Params) => Screen;
  * Existing untagged status broadcasts remain compatible with the original IPC client.
  * Methods:
  * session.info -> {instance_id,version,capabilities:string[]}
- * player.action {action:"play_pause"|"previous"|"next"|"stop"|"seek"|"volume"|"repeat"|"shuffle"|"play",value?,uri?}
+ * player.action {action:"play_pause"|"previous"|"previous_or_restart"|"next"|"undo_skip"|"stop"|"seek"|"seek_relative"|"volume"|"volume_relative"|"repeat"|"shuffle"|"play",value?,uri?}
  * player.artwork {uri?,width?:1..40,height?:1..20} -> {available,uri,width,height,pixels?:string[],reason?}; two RGB pixel rows per terminal row
  * audio.subscribe {fps?:1..60,bands?:0..128,waveform?:0..512} -> {subscribed,fps,bands,waveform}; this connection then also gets
  *   {audio:{live,bands,waveform,level,pulse,beats,tempo}} lines at fps while sound plays. audio.unsubscribe -> {subscribed:false}

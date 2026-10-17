@@ -3,6 +3,51 @@ import { DemoApi } from "../src/workspace/demo.js";
 import { RpcError } from "../src/workspace/client.js";
 import type { Page, Row } from "../src/workspace/contracts.js";
 
+test("demo relative playback controls clamp bounds and previous restarts after three seconds", async () => {
+  const demo = new DemoApi();
+  const action = (action: string, value?: number) => demo.call("player.action", { action, ...(value === undefined ? {} : { value }) });
+  await action("volume_relative", 5); expect(demo.status.prototype!.volume_percent).toBe(73);
+  await action("volume_relative", 100); expect(demo.status.prototype!.volume_percent).toBe(100);
+  await action("volume_relative", -200); expect(demo.status.prototype!.volume_percent).toBe(0);
+  await action("play_pause"); await action("seek", 3_001);
+  const first = demo.status.playable!.uri;
+  await action("previous_or_restart");
+  expect(demo.status.playable!.uri).toBe(first);
+  expect(demo.status.mode).toEqual({ kind: "paused", positionMs: 0 });
+  await action("seek_relative", -10_000); expect(demo.status.prototype!.position_ms).toBe(0);
+  await action("seek_relative", 1_000_000); expect(demo.status.mode).toEqual({ kind: "paused", positionMs: demo.status.playable!.duration });
+  await action("seek", 3_000); await action("previous_or_restart");
+  expect(demo.status.playable!.uri).not.toBe(first);
+  await expect(action("seek_relative", NaN)).rejects.toBeInstanceOf(RpcError);
+  await expect(action("volume_relative", Infinity)).rejects.toBeInstanceOf(RpcError);
+});
+
+test("demo undo restores only the latest manual skip with position and paused state", async () => {
+  const demo = new DemoApi();
+  const action = (action: string, value?: number) => demo.call("player.action", { action, ...(value === undefined ? {} : { value }) });
+  await expect(action("undo_skip")).rejects.toBeInstanceOf(RpcError);
+  await action("seek", 12_345); await action("play_pause");
+  const first = demo.status.playable!.uri;
+  await action("next"); await action("undo_skip");
+  expect(demo.status.playable!.uri).toBe(first);
+  expect(demo.status.mode).toEqual({ kind: "paused", positionMs: 12_345 });
+  expect(demo.status.prototype!.position_ms).toBe(12_345);
+  await expect(action("undo_skip")).rejects.toBeInstanceOf(RpcError);
+  await action("next"); await action("seek", 7_000);
+  const second = demo.status.playable!.uri;
+  await action("next"); await action("undo_skip");
+  expect(demo.status.playable!.uri).toBe(second);
+  expect(demo.status.prototype!.position_ms).toBe(7_000);
+  await action("next"); await demo.call("queue.action", { action: "append", uri: first });
+  await expect(action("undo_skip")).rejects.toBeInstanceOf(RpcError);
+  await action("next"); await action("previous");
+  await expect(action("undo_skip")).rejects.toBeInstanceOf(RpcError);
+  const natural = new DemoApi();
+  await natural.call("player.action", { action: "seek", value: natural.status.playable!.duration });
+  natural.tick();
+  await expect(natural.call("player.action", { action: "undo_skip" })).rejects.toBeInstanceOf(RpcError);
+});
+
 test("offline fixtures cover browsing, searching and playback without shared state", async () => {
   let broadcasts = 0;
   const demo = new DemoApi(() => broadcasts++);

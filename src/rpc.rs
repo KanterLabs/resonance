@@ -1390,6 +1390,40 @@ impl RpcService {
         match string(p, "action")? {
             "play_pause" => self.queue.toggleplayback(),
             "previous" => self.queue.previous(),
+            "previous_or_restart" => self.queue.previous_or_restart(),
+            "undo_skip" => self.queue.undo_skip().map_err(invalid)?,
+            "seek_relative" => {
+                let delta = p
+                    .get("value")
+                    .and_then(Value::as_i64)
+                    .filter(|v| (-86_400_000..=86_400_000).contains(v))
+                    .ok_or_else(|| {
+                        invalid("seek delta must be signed milliseconds within one day")
+                    })?;
+                if let Some(track) = self.queue.get_current() {
+                    let position = spotify
+                        .get_current_progress()
+                        .as_millis()
+                        .min(i64::MAX as u128) as i64;
+                    spotify.seek(
+                        position
+                            .saturating_add(delta)
+                            .clamp(0, i64::from(track.duration())) as u32,
+                    );
+                }
+            }
+            "volume_relative" => {
+                let delta = p
+                    .get("value")
+                    .and_then(Value::as_i64)
+                    .filter(|v| (-100..=100).contains(v))
+                    .ok_or_else(|| {
+                        invalid("volume delta must be an integer between -100 and 100")
+                    })?;
+                let percent = (i64::from(spotify.volume()) * 100 / 65535 + delta).clamp(0, 100);
+                // Round up so the displayed integer percentage advances by exactly five.
+                spotify.set_volume(((percent * 65535 + 99) / 100) as u16, true);
+            }
             "next" => self.queue.next(true),
             "stop" => self.queue.stop(),
             "seek" => spotify.seek(number(p, "value", 0, u32::MAX as usize)? as u32),
@@ -1845,6 +1879,60 @@ mod tests {
         ));
         RpcService::new(queue, library, config, events)
     }
+    #[test]
+    fn relative_player_controls_clamp_and_accumulate() {
+        use crate::spotify::PlayerEvent;
+        use std::time::Duration;
+        let service = service();
+        service
+            .queue
+            .rpc_append_play(Playable::Track(fixture_track("One", "One", 0)));
+        let spotify = service.queue.get_spotify();
+        spotify.update_status(PlayerEvent::Paused(Duration::from_secs(175)));
+        service
+            .player_action(&json!({"action":"seek_relative","value":10000}))
+            .unwrap();
+        assert_eq!(spotify.get_current_progress(), Duration::from_secs(180));
+        service
+            .player_action(&json!({"action":"seek_relative","value":-10000}))
+            .unwrap();
+        service
+            .player_action(&json!({"action":"seek_relative","value":-10000}))
+            .unwrap();
+        assert_eq!(spotify.get_current_progress(), Duration::from_secs(160));
+        service
+            .player_action(&json!({"action":"seek_relative","value":-200000}))
+            .unwrap();
+        assert_eq!(spotify.get_current_progress(), Duration::ZERO);
+        spotify.set_volume(65535, false);
+        service
+            .player_action(&json!({"action":"volume_relative","value":5}))
+            .unwrap();
+        assert_eq!(spotify.volume(), 65535);
+        service
+            .player_action(&json!({"action":"volume_relative","value":-100}))
+            .unwrap();
+        service
+            .player_action(&json!({"action":"volume_relative","value":-5}))
+            .unwrap();
+        assert_eq!(spotify.volume(), 0);
+        for expected in [5, 10] {
+            service
+                .player_action(&json!({"action":"volume_relative","value":5}))
+                .unwrap();
+            assert_eq!(u64::from(spotify.volume()) * 100 / 65535, expected);
+        }
+        for action in ["volume_relative", "seek_relative"] {
+            for value in [json!("5"), json!(1.5), json!(null), json!(100000000)] {
+                assert!(
+                    service
+                        .player_action(&json!({"action":action,"value":value}))
+                        .is_err()
+                );
+            }
+        }
+    }
+
     fn fixture_track(identity: &str, title: &str, index: usize) -> Track {
         Track {
             id: Some(identity.to_owned()),

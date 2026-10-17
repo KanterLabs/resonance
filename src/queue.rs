@@ -82,6 +82,16 @@ pub struct Queue {
     /// station that has never owned the queue lane.
     resume_context_valid: RwLock<bool>,
     radio: Mutex<RadioState>,
+    last_skip: Mutex<Option<SkipSnapshot>>,
+}
+
+/// One undo entry for an exact queue occurrence, valid only until another selection/edit.
+struct SkipSnapshot {
+    index: usize,
+    revision: String,
+    after_token: u64,
+    position_ms: u32,
+    playing: bool,
 }
 
 /// State shared by radio workers and the UI thread. Holding this lock while a
@@ -264,6 +274,7 @@ impl Queue {
             resume_context: RwLock::new(Vec::new()),
             resume_context_valid: RwLock::new(false),
             radio: Mutex::new(RadioState::default()),
+            last_skip: Mutex::new(None),
         }
     }
 
@@ -314,6 +325,7 @@ impl Queue {
             resume_context: RwLock::new(resume_context),
             resume_context_valid: RwLock::new(resume_context_valid),
             radio: Mutex::new(RadioState::default()),
+            last_skip: Mutex::new(None),
         }
     }
 
@@ -1835,7 +1847,18 @@ impl Queue {
     /// `reshuffle`: Reshuffle the current order of the queue.
     /// `shuffle_index`: If this is true, `index` isn't actually used, but is
     /// chosen at random as a valid index in the queue.
-    pub fn play(&self, mut index: usize, reshuffle: bool, shuffle_index: bool) {
+    pub fn play(&self, index: usize, reshuffle: bool, shuffle_index: bool) {
+        self.play_at(index, reshuffle, shuffle_index, None);
+    }
+
+    // Explicit undo or previous may replay a consumed station occurrence.
+    fn play_at(
+        &self,
+        mut index: usize,
+        reshuffle: bool,
+        shuffle_index: bool,
+        resume: Option<(u32, bool)>,
+    ) {
         let queue_length = self.queue.read().unwrap().len();
         // The length of the queue must be bigger than 0 or gen_range panics!
         if queue_length > 0 && shuffle_index && self.get_shuffle() {
@@ -1860,7 +1883,7 @@ impl Queue {
                             self.session_song_keys.lock().unwrap().contains(&key)
                         })
                 });
-            if (consumed || session_duplicate) && (radio.active || automatic) {
+            if resume.is_none() && (consumed || session_duplicate) && (radio.active || automatic) {
                 crate::ui::osd::notify(
                     "Already played this session; queue the song again to replay it",
                 );
@@ -1883,7 +1906,8 @@ impl Queue {
             track
         };
         if let Some(track) = track.as_ref() {
-            self.spotify.load(track, true, 0);
+            let (position_ms, playing) = resume.unwrap_or((0, true));
+            self.spotify.load(track, playing, position_ms);
             self.listening.lock().unwrap().observe(track.track(), false);
             self.spotify.update_track();
 
@@ -1912,7 +1936,7 @@ impl Queue {
 
             // Send a Seeked signal at start of new track
             #[cfg(feature = "mpris")]
-            self.spotify.notify_seeked(0);
+            self.spotify.notify_seeked(position_ms);
         }
 
         if reshuffle && self.get_shuffle() {
@@ -1964,8 +1988,58 @@ impl Queue {
     /// used, and the next track will actually be played. This should be used
     /// when going to the next entry in the queue is the wanted behavior.
     pub fn next(&self, manual: bool) {
-        let _mutation = self.rpc_mutation.lock().unwrap();
+        let mutation = self.rpc_mutation.lock().unwrap();
+        let snapshot = if manual {
+            self.get_current_index().map(|index| SkipSnapshot {
+                index,
+                revision: Self::rpc_revision(*mutation, &self.queue.read().unwrap()),
+                after_token: 0,
+                position_ms: self
+                    .spotify
+                    .get_current_progress()
+                    .as_millis()
+                    .min(u32::MAX as u128) as u32,
+                playing: !matches!(self.spotify.get_current_status(), PlayerEvent::Paused(_)),
+            })
+        } else {
+            None
+        };
         self.next_inner(manual);
+        *self.last_skip.lock().unwrap() = snapshot.map(|mut saved| {
+            saved.after_token = *self.current_token.read().unwrap();
+            saved
+        });
+    }
+
+    /// Restore a manual skip without a load/seek race or URI lookup ambiguity.
+    pub fn undo_skip(&self) -> Result<(), String> {
+        let mutation = self.rpc_mutation.lock().unwrap();
+        let saved = self
+            .last_skip
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| "No skip to undo".to_string())?;
+        if saved.after_token != *self.current_token.read().unwrap()
+            || saved.revision != Self::rpc_revision(*mutation, &self.queue.read().unwrap())
+        {
+            return Err("Playback or queue changed; skip can no longer be undone".into());
+        }
+        self.play_at(
+            saved.index,
+            false,
+            false,
+            Some((saved.position_ms, saved.playing)),
+        );
+        Ok(())
+    }
+
+    pub fn previous_or_restart(&self) {
+        if self.spotify.get_current_progress() > Duration::from_secs(3) {
+            self.spotify.seek(0);
+        } else {
+            self.previous();
+        }
     }
 
     fn next_inner(&self, manual: bool) {
@@ -2025,13 +2099,13 @@ impl Queue {
         let length = self.queue.read().unwrap().len();
 
         if let Some(index) = self.previous_index() {
-            self.play(index, false, false);
+            self.play_at(index, false, false, Some((0, true)));
         } else if repeat == RepeatSetting::RepeatPlaylist && length > 0 {
             if let Some(last) = self.repeatable_index(true) {
-                self.play(last, false, false);
+                self.play_at(last, false, false, Some((0, true)));
             }
         } else if let Some(index) = current {
-            self.play(index, false, false);
+            self.play_at(index, false, false, Some((0, true)));
         }
     }
 
