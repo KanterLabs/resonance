@@ -39,7 +39,7 @@ In the legacy interface, F5 / `:prototype` still opens a separate companion term
 
 | Key | Screen | Actions |
 | --- | --- | --- |
-| 1 | Now Playing | Transport, seek, volume, repeat, shuffle, save, share, quick search, appearance and motion |
+| 1 | Now Playing | Transport, seek, volume, repeat, shuffle, save, share, add to playlist, quick search, appearance and motion |
 | 2 | Queue | Play/remove an entry, reorder, append/play next, clear, save as playlist |
 | 3 | Library | Saved tracks, albums and artists; details and save/unsave |
 | 4 | Search | Query tracks, albums, artists, playlists, shows and episodes |
@@ -80,6 +80,12 @@ the first Spotify page, with duplicate URIs shown once. Spotify filters such as
 The Search screen's **[ / ]** keys move through consecutive ten-result catalog pages;
 saved suggestions do not consume catalog positions.
 Cached results remain usable when a refresh fails; **Ctrl+R** retries in quick search.
+
+**P** in Now Playing adds the playing song to a playlist. The popup lists the playlists your
+account can edit, with the one you used last at the top. Type to filter, **↑/↓** to choose,
+**Enter** to add and **Esc** to close. If nothing matches the name you typed, Enter creates a
+playlist with that name containing the song. Adding the same song to the same playlist twice
+in a session asks for a second Enter first.
 Search errors distinguish rejected requests, authentication, access, network, incompatible
 responses, and actual rate limits. Rate-limit errors include the remaining wait when available.
 

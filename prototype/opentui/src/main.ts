@@ -29,7 +29,7 @@ Usage:
 Space play/pause · Shift+R radio · L appearance · : commands · q quit
 Ctrl+Left previous/restart · Ctrl+Right next · Ctrl+Up/Down volume ±5%
 Alt+Left/Right seek ±10 seconds · Ctrl+Z undo last skip
-Now Playing: / quick search · Enter play now · Ctrl+N next · Ctrl+E queue · v turntable/classic
+Now Playing: / quick search · Enter play now · Ctrl+N next · Ctrl+E queue · p add to playlist · v turntable/classic
 Focused inputs capture these keys; Escape cancels or returns.
 `;
 export interface CliOptions { socket?: string; demo: boolean; smoke: boolean; theme?: ThemeName; route?: Route; reducedMotion?: boolean; debug?: string }

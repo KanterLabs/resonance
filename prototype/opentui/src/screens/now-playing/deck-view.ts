@@ -187,7 +187,7 @@ export function createDeckView(ctx: ScreenContext, state: () => DeckState, actio
       ["next", next ? next.title : radio ? "finding tracks…" : "nothing queued"],
     ];
     rows.forEach(([label, value], index) => { facts[index]!.content = new StyledText([chunk(label.padEnd(8), colors.dim, colors.background), chunk(value, colors.text, colors.background)]); });
-    hint!.content = "v classic · / search · ? help"; hint!.fg = colors.dim;
+    hint!.content = "v classic · p playlist · / find"; hint!.fg = colors.dim;
 
     crate.visible = layout.crate;
     if (layout.crate) {

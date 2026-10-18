@@ -13,6 +13,7 @@ export function helpRows(bindings: Record<string, string>): Row[] {
     { id: "arc", kind: "shortcut", title: "0  Arc Studio: playlists shaped like a mood", subtitle: "Builds from the playing song · ↑↓ pick · ⏎ play from here · ←→ shape · −/+ length · [/] mix · r swap · k keep · x remove · g remix · e edit curve · s save" },
     { id: "now-playing-style", kind: "shortcut", title: "v  Turntable or classic Now Playing", subtitle: "The choice is remembered · click the deck to play or pause" },
     { id: "quick-search", kind: "shortcut", title: "/  Quick search in Now Playing", subtitle: "Type a song · ↑/↓ select · Enter play now · Ctrl+N play next · Ctrl+E queue · Esc close" },
+    { id: "add-to-playlist", kind: "shortcut", title: "p  Add the playing song to a playlist", subtitle: "From Now Playing · type to filter or name a new playlist · ↑/↓ select · Enter add · Esc close" },
     { id: "playback", kind: "shortcut", title: "Global playback controls (outside text inputs)", subtitle: "Ctrl+← previous/restart · Ctrl+→ next · Ctrl+↑/↓ volume ±5% · Alt+←/→ seek ±10s · Ctrl+Z undo last skip" },
     ...Object.entries(bindings).sort(([a], [b]) => a.localeCompare(b)).map(([key, command]) => ({ id: `binding:${key}`, kind: "binding", title: key, subtitle: command })),
   ];
