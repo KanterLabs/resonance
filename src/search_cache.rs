@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{self, CACHE_VERSION};
 use crate::model::track::Track;
+use crate::search_match::SearchQuery;
 
 const CACHE_FILE: &str = "searches.db";
 /// Queries kept on disk and in memory. Each holds a page of results, so this is a
@@ -33,8 +34,8 @@ struct Entry {
 /// Remembered search results, in memory and on disk.
 ///
 /// Quick search draws from this before it asks the network, so a repeated or
-/// re-typed query lands instantly and a growing query always has the previous
-/// prefix's results on screen instead of an empty list.
+/// re-typed query lands instantly and a growing query can reuse matching track
+/// metadata from earlier searches while a catalogue request is in flight.
 #[derive(Default)]
 pub struct SearchCache {
     entries: RwLock<HashMap<String, Entry>>,
@@ -91,8 +92,9 @@ impl SearchCache {
         }
     }
 
-    /// Anything already known about this query: an exact hit however old, or failing
-    /// that the results of the longest prefix of it that was searched before.
+    /// Preserve an exact catalogue response, regardless of age. Otherwise match
+    /// the current query against known metadata, so earlier queries cannot leave
+    /// unrelated tracks on screen as the user types.
     pub fn best_effort(&self, query: &str) -> Vec<Track> {
         let key = normalize(query);
         if key.is_empty() {
@@ -102,12 +104,32 @@ impl SearchCache {
         if let Some(entry) = entries.get(&key) {
             return entry.tracks.clone();
         }
-        entries
-            .values()
-            .filter(|entry| key.starts_with(&entry.query))
-            .max_by_key(|entry| entry.query.len())
-            .map(|entry| entry.tracks.clone())
-            .unwrap_or_default()
+        let query = SearchQuery::new(query);
+        if query.is_structured() {
+            return vec![];
+        }
+        // Query order makes duplicate metadata deterministic even when the same
+        // URI was returned in several catalogue responses.
+        let mut ordered: Vec<_> = entries.values().collect();
+        ordered.sort_by(|a, b| a.query.cmp(&b.query));
+        let mut scored: Vec<_> = ordered
+            .into_iter()
+            .flat_map(|entry| &entry.tracks)
+            .filter_map(|track| query.score_track(track).map(|score| (score, track)))
+            .collect();
+        scored.sort_by(|(a_score, a), (b_score, b)| {
+            b_score
+                .cmp(a_score)
+                .then_with(|| a.uri.cmp(&b.uri))
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        let mut seen = HashSet::new();
+        scored
+            .into_iter()
+            .filter(|(_, track)| seen.insert(track.uri.as_str()))
+            .take(10)
+            .map(|(_, track)| track.clone())
+            .collect()
     }
 
     pub fn store(&self, query: &str, tracks: Vec<Track>) {
@@ -237,15 +259,70 @@ mod tests {
     }
 
     #[test]
-    fn a_longer_query_falls_back_to_its_longest_known_prefix() {
+    fn growing_queries_filter_stale_cached_results_against_track_metadata() {
         let cache = SearchCache::default();
-        cache.store("ju", vec![track("short")]);
-        cache.store("juno", vec![track("long")]);
-
-        let found = cache.best_effort("juno rea");
-        assert_eq!(found.first().map(|t| t.title.clone()), Some("long".into()));
-        // An unrelated query shares no prefix, so nothing stale is shown for it.
+        cache.store("sol", vec![track("Solaris"), track("Solitude")]);
+        let found = cache.best_effort("solar");
+        assert_eq!(
+            found.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            ["Solaris"]
+        );
+        assert!(cache.best_effort("solar missing").is_empty());
         assert!(cache.best_effort("orbital").is_empty());
+    }
+
+    #[test]
+    fn remembered_metadata_matches_even_without_a_cached_query_prefix() {
+        let cache = SearchCache::default();
+        let mut solaris = track("Solaris");
+        solaris.artists = vec!["Juno Reactor".into()];
+        cache.store("bible", vec![solaris]);
+        assert_eq!(cache.best_effort("reactor sol").len(), 1);
+        assert_eq!(cache.best_effort("solairs").len(), 1);
+        assert!(cache.best_effort("artist:juno").is_empty());
+    }
+
+    #[test]
+    fn exact_cached_queries_preserve_catalogue_order_and_structured_results() {
+        let cache = SearchCache::default();
+        cache.store("artist:juno", vec![track("Solaris"), track("Other")]);
+        assert_eq!(
+            cache
+                .best_effort("ARTIST:JUNO")
+                .iter()
+                .map(|t| t.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Solaris", "Other"]
+        );
+        cache.store(
+            "sol",
+            vec![track("Catalogue recommendation"), track("Solaris")],
+        );
+        assert_eq!(
+            cache.best_effort("sol")[0].title,
+            "Catalogue recommendation"
+        );
+    }
+
+    #[test]
+    fn local_cache_results_are_ranked_deduplicated_bounded_and_stable() {
+        let cache = SearchCache::default();
+        let mut tracks = vec![track("Solairs"), track("Solarisian"), track("Solaris")];
+        tracks.extend((0..20).map(|n| track(&format!("Solaris {n:02}"))));
+        cache.store("first", tracks);
+        cache.store("second", vec![track("Solaris")]);
+        let found = cache.best_effort("solaris");
+        assert_eq!(found.len(), 10);
+        assert_eq!(found[0].title, "Solaris");
+        assert_eq!(found.iter().filter(|t| t.title == "Solaris").count(), 1);
+        assert_eq!(
+            found.iter().map(|t| &t.uri).collect::<Vec<_>>(),
+            cache
+                .best_effort("solaris")
+                .iter()
+                .map(|t| &t.uri)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

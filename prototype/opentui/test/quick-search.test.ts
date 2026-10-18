@@ -15,6 +15,24 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test("quick search shows saved matches before catalog results and plays a saved-only match", async () => {
+  const saved = { ...track("saved", "Saved match"), saved: true };
+  const f = await fixture({ respond: method => method === "search"
+    ? { ...page([track("saved", "Catalog copy"), track("remote", "Remote match")], "spotify"), local_items: [saved] }
+    : {} });
+  try {
+    f.controller.open(); await f.mockInput.typeText("match"); await wait(180); await f.renderOnce();
+    const frame = f.captureCharFrame();
+    expect(frame).toContain("Saved match");
+    expect(frame).toContain("saved");
+    expect(frame).toContain("1 saved");
+    expect(frame).not.toContain("Catalog copy");
+    expect(frame.indexOf("Saved match")).toBeLessThan(frame.indexOf("Remote match"));
+    f.mockInput.pressEnter(); await wait();
+    expect(f.calls.at(-1)).toEqual({ method: "player.action", params: { action: "play", uri: saved.uri } });
+  } finally { f.cleanup(); }
+});
+
 function findInput(root: Renderable): InputRenderable | undefined {
   if (root instanceof InputRenderable) return root;
   for (const child of root.getChildren()) {

@@ -69,7 +69,15 @@ to select a song, **Enter** to play now, **Ctrl+N** to play next, or **Ctrl+E** 
 queue. **Esc** closes the popup. Clickable buttons provide the same three actions. Play next
 and add to queue keep the current song playing and count as explicit user choices in radio.
 Live search uses ten results per request to match Spotify's current Search API limit.
-The Search screen's **[ / ]** keys move through consecutive ten-result pages.
+The Search screen searches as you type after a short pause; **Enter** finishes editing.
+Both search views match words across song, artist and album names in any order, ignore
+accents and punctuation, and tolerate small typos in longer words in your saved and
+previously searched music. Exact matches rank above partial and typo matches; saved
+status and positive listening history break ties. Up to ten saved matches stay above
+the first Spotify page, with duplicate URIs shown once. Spotify filters such as
+`artist:Radiohead` are passed through without adding guessed local matches.
+The Search screen's **[ / ]** keys move through consecutive ten-result catalog pages;
+saved suggestions do not consume catalog positions.
 Cached results remain usable when a refresh fails; **Ctrl+R** retries in quick search.
 Search errors distinguish rejected requests, authentication, access, network, incompatible
 responses, and actual rate limits. Rate-limit errors include the remaining wait when available.

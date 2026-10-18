@@ -19,6 +19,8 @@ export interface Row {
 }
 export interface Page<T = Row> {
   items: T[];
+  /** Saved search matches, outside the catalog's pagination metadata. */
+  local_items?: T[];
   offset: number;
   limit: number;
   total: number;

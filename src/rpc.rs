@@ -161,6 +161,49 @@ fn track(t: &Track) -> Value {
     r["meta"] = json!({"added_at":t.added_at});
     r
 }
+/// Text relevance wins; saved status and positive listening history only break
+/// ties. Remote rows are never filtered, since Spotify can match metadata that
+/// is not present in the compact RPC row.
+fn rank_search_rows(
+    query: &str,
+    rows: Vec<Value>,
+    history: &HashMap<String, crate::recommendations::history::Feedback>,
+    local_only: bool,
+) -> Vec<Value> {
+    let query = crate::search_match::SearchQuery::new(query);
+    if query.is_structured() {
+        return if local_only { vec![] } else { rows };
+    }
+    let mut scored = rows
+        .into_iter()
+        .filter_map(|row| {
+            let relevance = query.score(
+                row["title"].as_str().unwrap_or_default(),
+                row["subtitle"].as_str().unwrap_or_default(),
+                row["detail"].as_str().unwrap_or_default(),
+            );
+            if local_only && relevance.is_none() {
+                return None;
+            }
+            let feedback = row["uri"].as_str().and_then(|uri| history.get(uri));
+            let positive = feedback.map_or(0, |f| f.completed.saturating_sub(f.skips).min(20));
+            let recent = feedback
+                .filter(|_| positive > 0)
+                .map_or(0, |f| f.last_played);
+            let key = (
+                relevance.unwrap_or(0),
+                row["saved"].as_bool().unwrap_or(false),
+                positive,
+                recent,
+            );
+            Some((key, row))
+        })
+        .collect::<Vec<_>>();
+    // Stable ordering keeps Spotify's order (or library order) for tied scores.
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+    scored.into_iter().map(|(_, row)| row).collect()
+}
+
 fn playable(p: &Playable) -> Value {
     match p {
         Playable::Track(t) => track(t),
@@ -1272,6 +1315,33 @@ impl RpcService {
             ),
         }
     }
+    fn local_search_rows(&self, kind: &str, query: &str) -> Vec<Value> {
+        let mut rows = self.cached(kind).unwrap_or_default();
+        for row in &mut rows {
+            row["saved"] = json!(true);
+        }
+        rank_search_rows(
+            query,
+            rows,
+            &crate::recommendations::history::shared().snapshot(),
+            true,
+        )
+    }
+
+    /// Saved matches supplement the first catalog page. Keeping them separate
+    /// preserves Spotify's offsets, limits and total, even when URIs overlap.
+    fn supplement_search(&self, result: &mut Value, kind: &str, query: &str, offset: usize) {
+        let local = if offset == 0 {
+            self.local_search_rows(kind, query)
+                .into_iter()
+                .take(10)
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
+        result["local_items"] = json!(local);
+    }
+
     fn search(&self, p: &Value) -> Result<Value> {
         // Use the same page size for local and remote results, so refreshing
         // cached rows and advancing a page cannot skip Spotify results.
@@ -1279,7 +1349,11 @@ impl RpcService {
         let mut params = p.clone();
         params["limit"] = json!(limit);
         let p = &params;
-        let query = string(p, "query")?.trim();
+        let query = p
+            .get("query")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("query must be a string"))?
+            .trim();
         let kind = p.get("kind").and_then(Value::as_str).unwrap_or("tracks");
         let ty = match kind {
             "tracks" | "track" => SearchType::Track,
@@ -1304,37 +1378,50 @@ impl RpcService {
                 .as_bool()
                 .ok_or_else(|| invalid("refresh must be boolean"))?,
         };
+        if query.is_empty() {
+            return page(vec![], p, "cache");
+        }
         let prefix = format!(
             "search:{cache_kind}:{}:",
             crate::search_cache::normalize(query)
         );
         let key = format!("{prefix}{offset}:{limit}");
         if !refresh {
-            if let Some(result) = self.cached_page(&key) {
+            if let Some(mut result) = self.cached_page(&key) {
+                self.supplement_search(&mut result, cache_kind, query, offset);
                 return Ok(result);
             }
             let has_remote_result = self.pages.lock().unwrap().iter().any(|(key, page)| {
                 key.starts_with(&prefix) && page.fetched_at.elapsed() < PAGE_CACHE_TTL
             });
             if !has_remote_result {
+                let mut rows = self.local_search_rows(cache_kind, query);
+                let has_saved = !rows.is_empty();
                 if cache_kind == "tracks" {
-                    let tracks = crate::search_cache::shared().best_effort(query);
-                    if !tracks.is_empty() {
-                        let mut result =
-                            page(tracks.iter().map(track).collect(), p, "search_cache")?;
-                        result["refresh_available"] = json!(true);
-                        return Ok(result);
-                    }
+                    let mut seen = rows
+                        .iter()
+                        .filter_map(|row| row["uri"].as_str().map(str::to_owned))
+                        .collect::<HashSet<_>>();
+                    rows.extend(
+                        crate::search_cache::shared()
+                            .best_effort(query)
+                            .iter()
+                            .filter(|track| seen.insert(track.uri.clone()))
+                            .map(track),
+                    );
                 }
-                let f = query.to_lowercase();
-                let mut cached = self.cached(cache_kind).unwrap_or_default();
-                cached.retain(|r| {
-                    format!("{} {}", r["title"], r["subtitle"])
-                        .to_lowercase()
-                        .contains(&f)
-                });
-                if !cached.is_empty() {
-                    let mut result = page(cached, p, "cache")?;
+                if !rows.is_empty() {
+                    // Decorate before ranking so exact cached hits use current saved state.
+                    let mut decorated = json!({"items":rows});
+                    self.decorate(&mut decorated);
+                    let rows = rank_search_rows(
+                        query,
+                        decorated["items"].as_array().unwrap().clone(),
+                        &crate::recommendations::history::shared().snapshot(),
+                        false,
+                    );
+                    let mut result =
+                        page(rows, p, if has_saved { "cache" } else { "search_cache" })?;
                     result["refresh_available"] = json!(true);
                     return Ok(result);
                 }
@@ -1381,8 +1468,16 @@ impl RpcService {
             ),
         };
         let count = rows.len();
-        let result = json!({"items":rows,"offset":offset,"limit":limit,"total":total,"has_more":count > 0 && offset.saturating_add(count) <= 1000 && offset.saturating_add(count)<total as usize,"source":"spotify"});
+        let mut result = json!({"items":rows,"offset":offset,"limit":limit,"total":total,"has_more":count > 0 && offset.saturating_add(count) <= 1000 && offset.saturating_add(count)<total as usize,"source":"spotify"});
+        self.decorate(&mut result);
+        result["items"] = json!(rank_search_rows(
+            query,
+            result["items"].as_array().unwrap().clone(),
+            &crate::recommendations::history::shared().snapshot(),
+            false
+        ));
         self.remember_page(key, &result);
+        self.supplement_search(&mut result, cache_kind, query, offset);
         Ok(result)
     }
     fn player_action(&self, p: &Value) -> Result<Value> {
@@ -2071,6 +2166,102 @@ mod tests {
         }
         assert_eq!(service.pages.lock().unwrap().len(), PAGE_CACHE_LIMIT);
     }
+    // Regression contract: local queries must survive Spotify refreshes without
+    // changing catalog offsets; structured filters must never acquire guessed hits.
+    #[test]
+    fn smart_search_matches_library_across_fields_and_keeps_saved_results() {
+        let service = service();
+        let mut song = fixture_track("Teardrop", "Teardrop", 0);
+        song.artists = vec!["Massive Attack".into()];
+        song.album = Some("Mezzanine".into());
+        service.library.tracks.write().unwrap().push(song.clone());
+        let first = service.search(&json!({"query":"attack teardorp"})).unwrap();
+        assert_eq!(first["items"][0]["id"], "Teardrop");
+        assert_eq!(first["items"][0]["saved"], true);
+        assert_eq!(first["refresh_available"], true);
+
+        let remote = json!({"items":[track(&fixture_track("Other", "Other", 0))],
+            "offset":0,"limit":10,"total":21,"has_more":true,"source":"spotify"});
+        service.remember_page("search:tracks:attack teardorp:0:10".into(), &remote);
+        let refreshed = service.search(&json!({"query":"attack teardorp"})).unwrap();
+        assert_eq!(refreshed["local_items"][0]["uri"], song.uri);
+        assert_eq!(refreshed["local_items"][0]["saved"], true);
+        assert_eq!(refreshed["items"], remote["items"]);
+        assert_eq!(refreshed["total"], 21);
+        assert_eq!(refreshed["has_more"], true);
+
+        let mut later = remote.clone();
+        later["offset"] = json!(10);
+        service.remember_page("search:tracks:attack teardorp:10:10".into(), &later);
+        let next = service
+            .search(&json!({"query":"attack teardorp","offset":10}))
+            .unwrap();
+        assert!(next["local_items"].as_array().unwrap().is_empty());
+        assert_eq!(next["offset"], 10);
+    }
+
+    #[test]
+    fn smart_search_handles_accents_album_words_and_empty_queries() {
+        let service = service();
+        let mut song = fixture_track("Svefn", "Svefn-g-englar", 0);
+        song.artists = vec!["Sigur Rós".into()];
+        song.album = Some("Ágætis byrjun".into());
+        service.library.tracks.write().unwrap().push(song);
+        let found = service
+            .search(&json!({"query":"sigur ros byrjun"}))
+            .unwrap();
+        assert_eq!(found["items"][0]["id"], "Svefn");
+        let blank = service.search(&json!({"query":"  "})).unwrap();
+        assert!(blank["items"].as_array().unwrap().is_empty());
+        assert_eq!(blank["has_more"], false);
+        assert!(
+            service
+                .local_search_rows("tracks", "artist:sigur")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn search_ranking_prefers_relevance_then_saved_and_positive_history() {
+        use crate::recommendations::history::Feedback;
+        let mut saved = track(&fixture_track("Saved", "Teardrop", 0));
+        saved["saved"] = json!(true);
+        let exact = track(&fixture_track("Exact", "Teardrop", 0));
+        let heard = track(&fixture_track("Heard", "Teardrop", 0));
+        let near = track(&fixture_track("Near", "Teardrops", 0));
+        let history = HashMap::from([
+            (
+                "spotify:track:Heard".into(),
+                Feedback {
+                    completed: 3,
+                    last_played: 100,
+                    ..Default::default()
+                },
+            ),
+            (
+                "spotify:track:Near".into(),
+                Feedback {
+                    completed: 100,
+                    last_played: 200,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let rows = rank_search_rows("teardrop", vec![near, exact, heard, saved], &history, false);
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["Saved", "Heard", "Exact", "Near"]
+        );
+        let filtered = rank_search_rows("unrelated", rows.clone(), &history, true);
+        assert!(filtered.is_empty());
+        assert_eq!(
+            rank_search_rows("artist:teardrop", rows.clone(), &history, false),
+            rows
+        );
+    }
+
     #[test]
     fn cached_search_announces_refresh_and_saved_domains_are_explicit() {
         let service = service();

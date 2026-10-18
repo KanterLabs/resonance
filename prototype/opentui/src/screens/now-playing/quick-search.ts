@@ -86,10 +86,10 @@ export function createQuickSearch(ctx: ScreenContext, parent: BoxRenderable): Qu
 
   const loader = new PageLoader(
     ctx.api,
-    (page: Page) => {
+    (_page: Page, renderedRows: Row[]) => {
       if (disposed || !openState) return;
       const selectedIdentity = rows[selected]?.uri ?? rows[selected]?.id;
-      rows = page.items.filter(row => !!row && typeof row.uri === "string" && row.uri.length > 0);
+      rows = renderedRows.filter(row => !!row && typeof row.uri === "string" && row.uri.length > 0);
       const retained = selectedIdentity ? rows.findIndex(row => row.uri === selectedIdentity || row.id === selectedIdentity) : -1;
       selected = rows.length ? retained >= 0 ? retained : Math.max(0, Math.min(selected < 0 ? 0 : selected, rows.length - 1)) : -1;
       adjustWindow();
@@ -163,7 +163,7 @@ export function createQuickSearch(ctx: ScreenContext, parent: BoxRenderable): Qu
       view.title.bg = rowBackground;
       view.artist.bg = rowBackground;
       view.duration.bg = rowBackground;
-      view.title.content = row.title.replace(/[\r\n\t]/g, " ");
+      view.title.content = `${row.title.replace(/[\r\n\t]/g, " ")}${row.saved ? " [saved]" : ""}`;
       view.artist.content = row.subtitle.replace(/[\r\n\t]/g, " ");
       view.duration.content = typeof row.duration_ms === "number" ? formatTime(row.duration_ms) : "";
     });

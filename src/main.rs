@@ -29,6 +29,7 @@ mod prototype;
 mod queue;
 mod recommendations;
 mod search_cache;
+mod search_match;
 mod serialization;
 mod sharing;
 mod song_map;

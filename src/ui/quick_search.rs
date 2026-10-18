@@ -15,6 +15,7 @@ use crate::model::playable::Playable;
 use crate::model::track::Track;
 use crate::queue::Queue;
 use crate::search_cache::{self, SearchCache};
+use crate::search_match::SearchQuery;
 use crate::spotify::Spotify;
 use crate::traits::ListItem;
 use crate::ui::radio;
@@ -120,16 +121,18 @@ impl QuickSearch {
     /// This needs no network at all: the library is already in memory, restored
     /// from its own disk cache at startup, so these land on the very keystroke.
     fn local_matches(&self, query: &str) -> Vec<Track> {
-        let needle = query.trim().to_lowercase();
-        if needle.is_empty() {
+        let query = SearchQuery::new(query);
+        if query.is_structured() {
             return vec![];
         }
         let tracks = self.library.tracks.read().unwrap();
-        let mut scored: Vec<(u8, &Track)> = tracks
+        let mut scored: Vec<(u32, &Track)> = tracks
             .iter()
-            .filter_map(|track| local_score(track, &needle).map(|score| (score, track)))
+            .filter_map(|track| query.score_track(track).map(|score| (score, track)))
             .collect();
-        scored.sort_by_key(|(score, _)| *score);
+        scored.sort_by(|(a_score, a), (b_score, b)| {
+            b_score.cmp(a_score).then_with(|| a.uri.cmp(&b.uri))
+        });
         scored
             .into_iter()
             .take(LOCAL_SLOTS)
@@ -138,8 +141,8 @@ impl QuickSearch {
     }
 
     /// Fill the list from what is already known, so it is never empty while a
-    /// request is out: library hits first, then the results of this query or of
-    /// the longest prefix of it that was searched before.
+    /// request is out: library hits first, then an exact cached response or other
+    /// remembered tracks that match the current query.
     fn show_known(&self, query: &str) -> bool {
         let local = self.local_matches(query);
         let remembered = self.cache.fresh(query);
@@ -487,29 +490,6 @@ impl View for QuickSearch {
     }
 }
 
-/// How well a saved track matches, lower being better. `None` means it does not.
-fn local_score(track: &Track, needle: &str) -> Option<u8> {
-    let title = track.title.to_lowercase();
-    if title.starts_with(needle) {
-        return Some(0);
-    }
-    let artists = track.artists.join(", ").to_lowercase();
-    if artists.starts_with(needle) {
-        return Some(1);
-    }
-    if title.contains(needle) {
-        return Some(2);
-    }
-    if artists.contains(needle) {
-        return Some(3);
-    }
-    let album = track.album.as_deref().unwrap_or_default().to_lowercase();
-    if album.contains(needle) {
-        return Some(4);
-    }
-    None
-}
-
 /// Library hits ahead of catalogue results, without repeating a track that is in
 /// both, trimmed to what the overlay can show.
 fn merge(local: Vec<Track>, remote: Vec<Track>) -> Vec<Track> {
@@ -717,20 +697,32 @@ mod tests {
     }
 
     #[test]
-    fn a_prefix_fills_the_list_while_the_next_query_is_out() {
+    fn cached_metadata_filters_results_while_the_next_query_is_out() {
         let (mut search, _) = overlay(0);
-        search.cache.store("sol", vec![track("Cached")]);
+        search
+            .cache
+            .store("sol", vec![track("Solaris"), track("Solitude")]);
 
         for character in "solar".chars() {
             press(&mut search, Event::Char(character));
         }
-        // The longer query is not cached, so its results are still coming, but the
-        // prefix's keep the list from going blank.
+        // The longer query keeps only matching remembered metadata while Spotify replies.
         assert_eq!(
             search.tracks().first().map(|found| found.title.clone()),
-            Some("Cached".to_string())
+            Some("Solaris".to_string())
         );
         assert!(search.results.read().unwrap().searching);
+    }
+
+    #[test]
+    fn library_matching_uses_reordered_normalized_tokens_and_skips_structured_syntax() {
+        let (search, _) = overlay(0);
+        let mut found = track("Déjà Vu");
+        found.artists = vec!["Beyoncé".to_string()];
+        search.library.tracks.write().unwrap().push(found);
+        assert_eq!(search.local_matches("beyonce deja").len(), 1);
+        assert_eq!(search.local_matches("vu beyonce").len(), 1);
+        assert!(search.local_matches("artist:Beyoncé").is_empty());
     }
 
     #[test]

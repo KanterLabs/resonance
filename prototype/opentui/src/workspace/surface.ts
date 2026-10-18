@@ -15,7 +15,7 @@ export interface Surface {
   handleKey(key: ScreenKey): boolean;
   setLines(lines: string[]): void;
   setTheme(theme: ThemeName): void;
-  prompt(label: string, initial: string, onSubmit: (value: string) => void): void;
+  prompt(label: string, initial: string, onSubmit: (value: string) => void, options?: { onChange?: (value: string) => void; onCancel?: () => void; reserveSpace?: boolean }): void;
   confirm(label: string, onConfirm: () => void): void;
   editing(): boolean;
   dispose(): void;
@@ -40,6 +40,7 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
   let input: InputRenderable | undefined;
   let overlayLabel: TextRenderable | undefined;
   let confirmAction: (() => void) | undefined;
+  let cancelPrompt: (() => void) | undefined;
   let previousFocus: Renderable | null = null;
 
   const root = new BoxRenderable(ctx.renderer, { id, width: "100%", height: "100%", minWidth: 0, minHeight: 0, flexDirection: "column", border: true, borderStyle: "rounded", paddingX: 1, backgroundColor: palette.panel, borderColor: palette.border });
@@ -59,7 +60,7 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
       node.backgroundColor = i === index ? palette.queueCurrent : palette.panel;
       const label = node.getChildren()[0] as TextRenderable;
       label.fg = i === index ? palette.text : palette.muted;
-      label.content = `${i === index ? "›" : " "} ${singleLine(rows[i]!.title)}${rows[i]!.subtitle ? ` · ${singleLine(rows[i]!.subtitle)}` : ""}${rows[i]!.detail ? `  ${singleLine(rows[i]!.detail!)}` : ""}`;
+      label.content = `${i === index ? "›" : " "} ${singleLine(rows[i]!.title)}${rows[i]!.saved ? " [saved]" : ""}${rows[i]!.subtitle ? ` · ${singleLine(rows[i]!.subtitle)}` : ""}${rows[i]!.detail ? `  ${singleLine(rows[i]!.detail!)}` : ""}`;
     });
   }
   function select(next: number) {
@@ -68,16 +69,19 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
     paintSelection();
     scroll.scrollChildIntoView(rowNodes[index]!.id);
   }
-  function closeOverlay(restore = true) {
+  function closeOverlay(restore = true, canceled = false) {
     if (!overlay) return;
+    const onCancel = cancelPrompt;
     input?.removeAllListeners();
     root.remove(overlay); overlay.destroyRecursively();
-    overlay = undefined; input = undefined; overlayLabel = undefined; confirmAction = undefined;
+    overlay = undefined; input = undefined; overlayLabel = undefined; confirmAction = undefined; cancelPrompt = undefined;
+    body.paddingTop = 0;
     if (restore && previousFocus && !previousFocus.isDestroyed) previousFocus.focus();
     previousFocus = null;
+    if (canceled) onCancel?.();
   }
   function openOverlay(label: string) {
-    closeOverlay();
+    closeOverlay(true, true);
     previousFocus = ctx.renderer.currentFocusedRenderable;
     overlay = new BoxRenderable(ctx.renderer, { id: `${id}-overlay`, position: "absolute", left: 0, right: 0, top: 2, height: 5, minWidth: 0, border: true, borderStyle: "rounded", paddingX: 1, flexDirection: "column", zIndex: 10, backgroundColor: palette.panelRaised, borderColor: palette.accent });
     overlayLabel = new TextRenderable(ctx.renderer, { content: singleLine(label), height: 1, truncate: true, selectable: false, fg: palette.text, bg: "transparent" });
@@ -112,7 +116,7 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
       if (disposed) return false;
       const name = key.name?.toLowerCase();
       if (overlay) {
-        if (name === "escape") { closeOverlay(); return true; }
+        if (name === "escape") { closeOverlay(true, true); return true; }
         if (confirmAction) {
           if (name === "y" && !key.ctrl && !key.meta) { const action = confirmAction; closeOverlay(); action(); }
           else if (name === "n" || name === "return" || name === "enter") closeOverlay();
@@ -150,11 +154,14 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
       if (overlayLabel) overlayLabel.fg = palette.text;
       if (input) { input.textColor = palette.text; input.backgroundColor = palette.panelRaised; input.focusedTextColor = palette.text; input.focusedBackgroundColor = palette.panelRaised; input.placeholderColor = palette.muted; }
     },
-    prompt(label, initial, onSubmit) {
+    prompt(label, initial, onSubmit, options) {
       if (disposed) return;
       openOverlay(`${label} · Enter to submit · Esc to cancel`);
+      if (options?.reserveSpace) body.paddingTop = 5;
       input = new InputRenderable(ctx.renderer, { id: `${id}-input`, value: initial, width: "100%", textColor: palette.text, backgroundColor: palette.panelRaised, focusedTextColor: palette.text, focusedBackgroundColor: palette.panelRaised, placeholderColor: palette.muted });
       input.on("enter", (value: string) => { closeOverlay(); onSubmit(value); });
+      if (options?.onChange) input.on("input", (value: string) => options.onChange!(value));
+      cancelPrompt = options?.onCancel;
       overlay!.add(input); input.focus();
     },
     confirm(label, onConfirm) {
