@@ -6,9 +6,7 @@ import { artworkTint, blendHex, blendPixels } from "./motion-colors.js";
 import { MOTION, PlayerMotion, ease, playingBars, queueKeys } from "./motion.js";
 import { createQuickSearch } from "./quick-search.js";
 import { glassArtwork, letterboxNativeArtwork, supportsImageArtwork, type HighResolutionArtwork } from "./glass-artwork.js";
-import { TURNTABLE_MAX_ROWS, TURNTABLE_MIN_ROWS, TURNTABLE_ORANGE, turntableLines, turntableWidth } from "./turntable.js";
-
-const SPEC_WIDTH = 32;
+import { createDeckView, deckLayout } from "./deck-view.js";
 
 export function ambientProgress(position: number, duration: number, width = 36): string {
   const fraction = duration > 0 ? Math.min(1, Math.max(0, position / duration)) : 0;
@@ -157,30 +155,14 @@ export const createNowPlayingScreen: ScreenFactory = (ctx) => {
 
   // The turntable view: a drawn record player beside a short spec sheet.
   let style = ctx.nowPlayingStyle?.() ?? "classic";
-  const deck = new BoxRenderable(ctx.renderer, { id: "np-turntable", visible: false, flexDirection: "row", gap: 4, alignItems: "center", flexShrink: 0 });
-  root.add(deck);
-  const deckArt = new BoxRenderable(ctx.renderer, { id: "np-turntable-art", flexDirection: "column", flexShrink: 0, onMouseDown: event => { if (event.button === MouseButton.LEFT) { void player("play_pause", "Playback toggled"); event.preventDefault(); } } });
-  deck.add(deckArt);
-  const deckRows: TextRenderable[] = [];
-  let deckKey = "";
-  let deckPixels: readonly string[] | null = null;
-  const spec = new BoxRenderable(ctx.renderer, { id: "np-turntable-spec", width: SPEC_WIDTH, flexDirection: "column", flexShrink: 0 });
-  deck.add(spec);
-  let specGaps = 0;
-  const specText = (id: string, tone: keyof ThemePalette, options: ConstructorParameters<typeof TextRenderable>[1] = {}) => text(spec, `turntable-${id}`, "", { width: SPEC_WIDTH, ...options }, tone, "background");
-  const specGap = () => row(spec, `np-turntable-gap-${specGaps++}`);
-  const deckModel = specText("model", "dim"); specGap();
-  const deckTitle = specText("title", "text", { attributes: TextAttributes.BOLD });
-  const deckArtist = specText("artist", "muted");
-  const deckAlbum = specText("album", "dim"); specGap();
-  const deckProgress = specText("progress", "text", { onMouseDown: event => {
-    if (event.button !== MouseButton.LEFT || !status?.playable) return;
-    const value = Math.round(Math.max(0, Math.min(1, (event.x - deckProgress.x) / (SPEC_WIDTH - 1))) * status.playable.duration);
-    void player("seek", `Seeked to ${formatTime(value)}`, value); event.preventDefault();
-  } });
-  const deckTimes = specText("times", "dim"); specGap();
-  const deckFacts = ["state", "volume", "mode", "next"].map(id => specText(id, "text")); specGap();
-  const deckHint = specText("hint", "dim");
+  const deck = createDeckView(ctx, () => ({
+    status, position: currentPosition(), theme, colors, repeat, shuffle,
+    cover: (() => { const pixels = coverPixels(Date.now()); return pixels ? { width: artWidth, height: artHeight * 2, pixels } : null; })(),
+  }), {
+    playPause: () => void player("play_pause", "Playback toggled"),
+    seek: value => void player("seek", `Seeked to ${formatTime(value)}`, value),
+  });
+  root.add(deck.root);
 
   function currentPosition() { return Math.min(status?.playable?.duration ?? 0, positionBase + (status?.mode.kind === "playing" ? Math.max(0, Date.now() - receivedAt) : 0)); }
   function uri() { const p = status?.playable; return p?.uri ?? (p?.id ? `spotify:${p.type === "Episode" ? "episode" : "track"}:${p.id}` : undefined); }
@@ -321,9 +303,8 @@ export const createNowPlayingScreen: ScreenFactory = (ctx) => {
     // `false` would be promoted back to a full border by that setter.
     playChip.border = compact ? noBorders : true; navigation.visible = !compact;
     const deckSpace = { height: root.height > 0 ? root.height : ctx.renderer.height - 7, width: root.width > 0 ? root.width : ctx.renderer.width - 4 };
-    const deckRowCount = Math.min(TURNTABLE_MAX_ROWS, deckSpace.height - 2);
-    const turntable = style === "turntable" && deckRowCount >= TURNTABLE_MIN_ROWS && turntableWidth(deckRowCount) + 4 + SPEC_WIDTH <= deckSpace.width;
-    columns.visible = !turntable; deck.visible = turntable;
+    const turntable = style === "turntable" && deckLayout(deckSpace).fits;
+    columns.visible = !turntable;
     const wantedHeight = compact && !turntable ? 6 : 10; const wantedWidth = wantedHeight * 2;
     if (artWidth !== wantedWidth || artHeight !== wantedHeight) { artWidth = wantedWidth; artHeight = wantedHeight; coverBox.width = artWidth + 2; coverBox.height = artHeight; }
     coverFallback.content = initials(p); artist.content = playableArtists(p); album.content = playableAlbum(p);
@@ -401,48 +382,13 @@ export const createNowPlayingScreen: ScreenFactory = (ctx) => {
     // resize can change the physical cell ratio without changing art cells.
     updateNativeArtwork();
     paintCover(now);
-    if (turntable) paintDeck(now, position, duration, deckRowCount);
-  }
-  function paintDeck(now: number, position: number, duration: number, rows: number) {
-    const p = status?.playable ?? null; const playing = status?.mode.kind === "playing";
-    const progress = p && duration > 0 ? position / duration : null;
-    // The label turns with the playhead, so pausing holds it still.
-    const rotation = ctx.reducedMotion() || !p ? 0 : (position / 1000 * 0.9) % (Math.PI * 2);
-    const pixels = coverPixels(now);
-    const key = `${rows}:${theme}:${Math.round(rotation * 40)}:${progress === null ? "parked" : Math.round(progress * 400)}:${playing}`;
-    if (key !== deckKey || pixels !== deckPixels) {
-      deckKey = key; deckPixels = pixels;
-      const lines = turntableLines({ rows, theme, background: colors.background, cover: pixels ? { width: artWidth, height: artHeight * 2, pixels } : null, progress, rotation, playing });
-      const width = turntableWidth(rows);
-      while (deckRows.length > lines.length) { const node = deckRows.pop()!; deckArt.remove(node); node.destroy(); }
-      lines.forEach((line, index) => {
-        let node = deckRows[index];
-        if (!node) { node = new TextRenderable(ctx.renderer, { id: `np-turntable-row-${index}`, content: line, width, height: 1, flexShrink: 0, selectable: false }); deckRows.push(node); deckArt.add(node); }
-        else { node.width = width; node.content = line; }
-      });
-    }
-    const chunk = (value: string, fg: string): TextChunk => ({ __isChunk: true, text: value, fg: RGBA.fromHex(fg), bg: RGBA.fromHex(colors.background) });
-    deckModel.content = "RS 33";
-    deckTitle.content = playableTitle(p); deckArtist.content = playableArtists(p); deckAlbum.content = playableAlbum(p);
-    const bar = SPEC_WIDTH - 1; const filled = duration > 0 ? Math.min(bar, Math.round(bar * position / duration)) : 0;
-    deckProgress.content = new StyledText([chunk("━".repeat(filled), TURNTABLE_ORANGE), chunk("●", colors.text), chunk("─".repeat(bar - filled), colors.progressTrack)]);
-    const elapsedText = formatTime(position), totalText = formatTime(duration);
-    deckTimes.content = elapsedText + " ".repeat(Math.max(1, SPEC_WIDTH - elapsedText.length - totalText.length)) + totalText;
-    const radio = !!status?.prototype?.radio_active; const next = status?.prototype?.up_next?.[0];
-    const facts: Array<[string, string]> = [
-      ["state", `${status?.mode.kind ?? "ready"}${radio ? " · radio" : ""}`],
-      ["volume", status?.prototype ? `${status.prototype.volume_percent}%` : "—"],
-      ["mode", `repeat ${repeat} · shuffle ${shuffle === undefined ? "—" : shuffle ? "on" : "off"}`],
-      ["next", next ? next.title : radio ? "finding tracks…" : "nothing queued"],
-    ];
-    facts.forEach(([label, value], index) => { deckFacts[index]!.content = new StyledText([chunk(label.padEnd(8), colors.dim), chunk(value, colors.text)]); });
-    deckHint.content = "v classic · / search · ? help";
+    deck.update(deckSpace, turntable);
   }
   function toggleStyle() {
     style = style === "turntable" ? "classic" : "turntable";
     ctx.setNowPlayingStyle?.(style);
     render(); syncTimer();
-    notice(style === "classic" ? "Classic player · v for the turntable" : deck.visible ? "Turntable · v for the classic player" : "Turntable needs a larger window; showing the classic player");
+    notice(style === "classic" ? "Classic player · v for the turntable" : deck.root.visible ? "Turntable · v for the classic player" : "Turntable needs a larger window; showing the classic player");
   }
   function syncTimer() {
     const now = Date.now(); const reduced = ctx.reducedMotion();
@@ -450,7 +396,8 @@ export const createNowPlayingScreen: ScreenFactory = (ctx) => {
     const playing = status?.mode.kind === "playing";
     // Short transitions get 25 frames/sec. Once settled, measured audio uses
     // 12.5 frames/sec and the playback-only icon needs just 6.25 frames/sec.
-    const cadence = disposed ? 0 : reduced ? playing ? 1000 : 0 : finite ? 40 : playing ? status?.prototype?.audio ? 80 : 160 : 0;
+    // The deck keeps its own frame clock; behind it the card only needs the clock.
+    const cadence = disposed ? 0 : reduced ? playing ? 1000 : 0 : finite ? 40 : playing ? deck.root.visible ? 1000 : status?.prototype?.audio ? 80 : 160 : 0;
     if (timer && cadence === timerCadence) return;
     if (timer) { clearInterval(timer); timer = undefined; }
     timerCadence = cadence;
@@ -516,6 +463,6 @@ export const createNowPlayingScreen: ScreenFactory = (ctx) => {
     },
     async refresh() { render(); syncTimer(); await Promise.all([loadMetadata(), loadArtwork(true)]); },
     setTheme(value) { theme = value; applyTheme(); updateNativeArtwork(); quickSearch.setTheme(value); render(); },
-    dispose() { if (disposed) return; disposed = true; ++artworkGeneration; if (timer) clearInterval(timer); unsubscribe(); ctx.renderer.off("resize", onResize); ctx.renderer.off("capabilities", onResize); ctx.renderer.off("frame", onFrame); quickSearch.dispose(); root.destroyRecursively(); },
+    dispose() { if (disposed) return; disposed = true; ++artworkGeneration; if (timer) clearInterval(timer); unsubscribe(); ctx.renderer.off("resize", onResize); ctx.renderer.off("capabilities", onResize); ctx.renderer.off("frame", onFrame); quickSearch.dispose(); deck.dispose(); root.destroyRecursively(); },
   };
 };

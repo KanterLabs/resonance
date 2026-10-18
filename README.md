@@ -147,8 +147,11 @@ In Now Playing, press **/** for quick search. Type a song or artist and select w
 **Esc** closes the popup. Search uses cached results first, without leaving Now Playing.
 
 Now Playing opens on a turntable drawn after the Braun PS 500: the cover turns on the label and the
-tonearm travels across the record as the song plays. Press **v** to switch to the classic player
-card and back; terminals too small for the deck show the classic player.
+tonearm travels across the record as the song plays. A VU meter follows the music, the progress bar
+is the song's own loudness, and wide terminals show the queue as a crate of records. Press **v** to
+switch to the classic player card and back; terminals too small for the deck show the classic player.
+**H** opens a listening diary, a year of listening as a heatmap, and after a few quiet minutes the
+workspace rests on a full-screen cover. See the [workspace guide](doc/opentui-prototype.md#turntable-diary-and-idle-screen).
 
 Light/dark preferences, reduced motion and the Now Playing view are saved separately from Rust
 configuration. The classic player centers beside an Up Next card on wide terminals and adapts to 80×24.

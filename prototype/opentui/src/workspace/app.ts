@@ -1,6 +1,6 @@
-import { BoxRenderable, TextAttributes, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
+import { BoxRenderable, RGBA, StyledText, TextAttributes, TextRenderable, type CliRenderer, type KeyEvent } from "@opentui/core";
 import { paletteForTheme, type ThemeName } from "../theme.js";
-import { formatTime, type ParsedStatus } from "../status.js";
+import { formatTime, type AudioFrame, type ParsedStatus } from "../status.js";
 import { ROUTES, type Params, type NowPlayingStyle, type Route, type RpcApi, type Screen, type ScreenContext, type ScreenFactory } from "./contracts.js";
 import { createNowPlayingScreen } from "../screens/now-playing/index.js";
 import { createQueueScreen } from "../screens/queue/index.js";
@@ -14,11 +14,14 @@ import { createArcsScreen } from "../screens/arcs/index.js";
 import { createSettingsScreen } from "../screens/settings/index.js";
 import { createHelpScreen } from "../screens/help/index.js";
 import { createCastScreen } from "../screens/cast/index.js";
+import { createDiaryScreen } from "../screens/diary/index.js";
+import { energyMap, type EnergyTone } from "./energy-map.js";
+import { createIdleScreen, IDLE_AFTER_MS } from "./idle.js";
 import { keyBindingName, PLAYBACK_SHORTCUTS, routeForCommand, WORKSPACE_BINDINGS } from "./bindings.js";
 
-const FACTORIES: Record<Route, ScreenFactory> = { "now-playing": createNowPlayingScreen, queue: createQueueScreen, library: createLibraryScreen, search: createSearchScreen, browse: createBrowseScreen, playlists: createPlaylistsScreen, podcasts: createPodcastsScreen, radio: createRadioScreen, arcs: createArcsScreen, settings: createSettingsScreen, help: createHelpScreen, cast: createCastScreen };
-const SHORTCUTS: Record<string, Route> = { "1": "now-playing", "2": "queue", "3": "library", "4": "search", "5": "playlists", "6": "podcasts", "7": "radio", "8": "settings", "9": "cast", "0": "arcs", b: "browse", "?": "help" };
-const LABELS: Record<Route, string> = { "now-playing": "1 Play", queue: "2 Queue", library: "3 Library", search: "4 Search", browse: "B Browse", playlists: "5 Lists", podcasts: "6 Pods", radio: "7 Radio", arcs: "0 Arcs", settings: "8 Setup", help: "? Help", cast: "9 Cast" };
+const FACTORIES: Record<Route, ScreenFactory> = { "now-playing": createNowPlayingScreen, queue: createQueueScreen, library: createLibraryScreen, search: createSearchScreen, browse: createBrowseScreen, playlists: createPlaylistsScreen, podcasts: createPodcastsScreen, radio: createRadioScreen, arcs: createArcsScreen, diary: createDiaryScreen, settings: createSettingsScreen, help: createHelpScreen, cast: createCastScreen };
+const SHORTCUTS: Record<string, Route> = { "1": "now-playing", "2": "queue", "3": "library", "4": "search", "5": "playlists", "6": "podcasts", "7": "radio", "8": "settings", "9": "cast", "0": "arcs", b: "browse", h: "diary", "?": "help" };
+const LABELS: Record<Route, string> = { "now-playing": "1 Play", queue: "2 Queue", library: "3 Library", search: "4 Search", browse: "B Browse", playlists: "5 Lists", podcasts: "6 Pods", radio: "7 Radio", arcs: "0 Arcs", diary: "H Diary", settings: "8 Setup", help: "? Help", cast: "9 Cast" };
 export interface WorkspaceOptions {
   api: RpcApi;
   theme: ThemeName;
@@ -28,6 +31,8 @@ export interface WorkspaceOptions {
   onReducedMotionChange?(value: boolean): void;
   nowPlayingStyle?: NowPlayingStyle;
   onNowPlayingStyleChange?(style: NowPlayingStyle): void;
+  /** Quiet time before the idle screen, while playing; 0 turns it off. */
+  idleAfterMs?: number;
   onQuit?(): void;
 }
 export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions) {
@@ -45,6 +50,8 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
   let lastNoticeId = 0;
   let customBindings: Record<string, string> = {};
   const listeners = new Set<(status: ParsedStatus) => void>();
+  const audioListeners = new Set<(frame: AudioFrame) => void>();
+  let audioSubscribed = false;
   const initialPalette = paletteForTheme(theme);
   const root = new BoxRenderable(renderer, { id: "workspace", width: "100%", height: "100%", flexDirection: "column", alignItems: "center", minWidth: 0, minHeight: 0, backgroundColor: initialPalette.background });
   // Keep the terminal-wide background on `root`, while this centered shell
@@ -88,14 +95,31 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
       try { options.onNowPlayingStyleChange?.(style); } catch (error) { notify(`Now Playing style saving failed: ${error instanceof Error ? error.message : error}`); }
     },
     status: () => status, onStatus(listener) { listeners.add(listener); return () => listeners.delete(listener); },
+    onAudio(listener) {
+      audioListeners.add(listener); syncAudio();
+      return () => { audioListeners.delete(listener); syncAudio(); };
+    },
     navigate, notify,
   };
+  /** One feed per connection: open it for the first listener and close it after the last. */
+  function syncAudio() {
+    const wanted = !disposed && audioListeners.size > 0;
+    if (wanted === audioSubscribed) return;
+    audioSubscribed = wanted;
+    void options.api.call(wanted ? "audio.subscribe" : "audio.unsubscribe", wanted ? { fps: 24, bands: 16, waveform: 0 } : {}).catch(() => { audioSubscribed = false; });
+  }
+  const idle = createIdleScreen({ renderer, api: options.api, status: () => status, theme: () => theme, reducedMotion: () => reducedMotion, onAudio: listener => context.onAudio!(listener) });
+  idle.root.onMouseDown = event => { lastInput = Date.now(); idle.hide(); event.preventDefault(); };
+  root.add(idle.root);
+  let lastInput = Date.now();
+  const idleAfter = options.idleAfterMs ?? IDLE_AFTER_MS;
   function notify(message: string) { if (disposed) return; noticeText = message; renderFooter(); renderer.requestRender(); }
   async function action(method: string, params: Params = {}) {
     try { await options.api.call(method, params); } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
   }
   async function command(text: string) {
     if (["quit", "q", "x"].includes(text.trim())) { quit(); return { completed: true }; }
+    if (text.trim() === "idle") { idle.show(); return { completed: true }; }
     const destination = routeForCommand(text);
     if (destination) { navigate(destination.route, destination.params); return { completed: true }; }
     const movement = /^move\s+(up|down|top|bottom)(?:\s+(\d+))?$/.exec(text.trim());
@@ -128,7 +152,16 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
     const playing = status?.mode.kind === "playing";
     const position = status?.prototype?.position_ms ?? (status?.mode.kind === "paused" ? status.mode.positionMs : 0);
     const elapsed = position + (playing ? Math.max(0, Date.now() - receivedAt) : 0);
-    footer.content = `${playing ? "▶" : "Ⅱ"} ${title}  ${formatTime(Math.min(playable?.duration ?? 0, elapsed))}/${formatTime(playable?.duration ?? 0)}  · Vol ${status?.prototype?.volume_percent ?? "—"}%`;
+    const line = `${playing ? "▶" : "Ⅱ"} ${title}  ${formatTime(Math.min(playable?.duration ?? 0, elapsed))}/${formatTime(playable?.duration ?? 0)}  · Vol ${status?.prototype?.volume_percent ?? "—"}%`;
+    // On wide terminals the footer also maps the session's energy, when it has been measured.
+    const map = renderer.width >= 100 ? energyMap(status?.prototype?.energy) : null;
+    if (!map) footer.content = line;
+    else {
+      const p = paletteForTheme(theme);
+      const tones: Record<EnergyTone, string> = { past: p.dim, current: p.accentBright, rising: p.teal, falling: p.amber, steady: p.muted, ahead: p.dim, label: p.muted };
+      footer.content = new StyledText([[line, p.text] as const, ["   energy ", p.dim] as const, ...map.map(([text, tone]) => [text, tones[tone]] as const)]
+        .map(([text, fg]) => ({ __isChunk: true as const, text, fg: RGBA.fromHex(fg), bg: RGBA.fromHex(p.background) })));
+    }
     const hints = renderer.width < 72
       ? "Ctrl+←/→ track ↑/↓ vol · Alt+←/→ seek · ^Z undo · ?"
       : "Ctrl+←/→ prev/next · Ctrl+↑/↓ vol · Alt+←/→ seek · Ctrl+Z undo · ? help";
@@ -136,6 +169,9 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
   }
   function onKey(key: KeyEvent) {
     if (disposed) return;
+    lastInput = Date.now();
+    // The first key only wakes the workspace from the idle screen.
+    if (idle.visible) { idle.hide(); key.preventDefault(); return; }
     // Focused prompts must receive normal text, including navigation digits.
     const wasEditing = screen?.editing?.() ?? false;
     const name = (key.name ?? key.sequence ?? "").toLowerCase();
@@ -169,7 +205,7 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
   function dispose() {
     if (disposed) return; disposed = true;
     clearInterval(timer); renderer.keyInput.off("keypress", onKey); renderer.off("resize", onResize);
-    screen?.dispose(); screen = undefined; listeners.clear(); root.destroyRecursively();
+    idle.dispose(); screen?.dispose(); screen = undefined; listeners.clear(); audioListeners.clear(); syncAudio(); root.destroyRecursively();
   }
   function quit() { if (disposed) return; dispose(); options.onQuit?.(); renderer.destroy(); }
   function onResize() {
@@ -179,7 +215,11 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
     renderFooter();
     renderer.requestRender();
   }
-  const timer = setInterval(() => { if (status?.mode.kind === "playing") { renderFooter(); renderer.requestRender(); } }, 1000);
+  const timer = setInterval(() => {
+    if (status?.mode.kind !== "playing") return;
+    renderFooter(); renderer.requestRender();
+    if (idleAfter > 0 && !idle.visible && !screen?.editing?.() && Date.now() - lastInput >= idleAfter) idle.show();
+  }, 1000);
   renderer.keyInput.on("keypress", onKey); renderer.on("resize", onResize);
   navigate(route); onResize();
   return {
@@ -190,6 +230,7 @@ export function mountWorkspace(renderer: CliRenderer, options: WorkspaceOptions)
     },
     bindings() { return { ...WORKSPACE_BINDINGS, ...customBindings }; },
     setConnection(connected: boolean, message: string) { if (disposed) return; connection = connected ? "Live engine" : message; connectionProblem = connected ? "" : message; renderFooter(); },
+    setAudio(frame: AudioFrame) { if (!disposed) for (const listener of audioListeners) listener(frame); },
     setStatus(next: ParsedStatus) {
       if (disposed) return; status = next; receivedAt = Date.now();
       for (const entry of next.notifications ?? []) {

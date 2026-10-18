@@ -3,7 +3,7 @@ import type { Row } from "../../workspace/contracts.js";
 export const GLOBAL_SHORTCUTS = [
   ["1", "Now Playing"], ["2", "Queue"], ["3", "Library"], ["4", "Search"],
   ["5", "Playlists"], ["6", "Podcasts"], ["7", "Radio"], ["8", "Settings"],
-  ["9", "Cast"], ["0", "Arcs playlist builder"], ["b", "Browse"], ["?", "Help"], [":", "Command palette"],
+  ["9", "Cast"], ["0", "Arcs playlist builder"], ["b", "Browse"], ["h", "Listening diary"], ["?", "Help"], [":", "Command palette"],
 ] as const;
 
 export function helpRows(bindings: Record<string, string>): Row[] {

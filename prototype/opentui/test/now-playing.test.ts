@@ -725,7 +725,8 @@ test("the turntable view draws the deck with a spec sheet and v switches styles"
     expect(f.screen.root.findDescendantById("np-columns")!.visible).toBe(false);
     expect(f.screen.root.findDescendantById("np-turntable-row-0")).toBeTruthy();
     const frame = f.captureCharFrame();
-    expect(frame).toContain("RS 33");
+    expect(f.screen.root.findDescendantById("np-turntable-meter")!.visible).toBe(true);
+    expect(frame).toContain("IN THE CRATE");
     expect(frame).toContain("volume");
     expect(frame).toContain("v classic");
     expect(frame).toContain("▀");

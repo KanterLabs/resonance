@@ -1,8 +1,10 @@
-import { parseStatus, type ParsedStatus } from "./status.js";
+import { parseAudioFrame, parseStatus, type AudioFrame, type ParsedStatus } from "./status.js";
 
 export interface IpcClientEvents {
   onStatus: (status: ParsedStatus) => void;
   onMalformedLine?: (line: string) => void;
+  /** Audio feed frames, after an `audio.subscribe` on this connection. */
+  onAudio?: (frame: AudioFrame) => void;
   onOpen?: () => void;
   onClose?: (error?: Error) => void;
 }
@@ -130,7 +132,9 @@ export class IpcClient {
       if (line.length > 8 * 1024 * 1024) { this.fail(new Error("Engine frame exceeds the IPC limit")); return; }
       if (line.trim()) {
         const status = parseStatus(line);
+        const frame = status ? null : parseAudioFrame(line);
         if (status) this.events.onStatus(status);
+        else if (frame) this.events.onAudio?.(frame);
         else this.events.onMalformedLine?.(line);
       }
       newlineIndex = this.receiveBuffer.indexOf("\n");

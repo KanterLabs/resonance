@@ -1,9 +1,9 @@
 import type { BoxRenderable, CliRenderer } from "@opentui/core";
-import type { ParsedStatus } from "../status.js";
+import type { AudioFrame, ParsedStatus } from "../status.js";
 import type { ThemeName } from "../theme.js";
 
 export const RPC_VERSION = 1;
-export const ROUTES = ["now-playing", "queue", "library", "search", "browse", "playlists", "podcasts", "radio", "arcs", "settings", "help", "cast"] as const;
+export const ROUTES = ["now-playing", "queue", "library", "search", "browse", "playlists", "podcasts", "radio", "arcs", "diary", "settings", "help", "cast"] as const;
 export type Route = typeof ROUTES[number];
 export type Params = Record<string, unknown>;
 export interface Row {
@@ -15,6 +15,8 @@ export interface Row {
   uri?: string;
   duration_ms?: number;
   saved?: boolean;
+  /** Spotify CDN cover, when the item has artwork. */
+  cover_url?: string;
   meta?: Params;
 }
 export interface Page<T = Row> {
@@ -55,6 +57,8 @@ export interface ScreenContext {
   setNowPlayingStyle?(style: NowPlayingStyle): void;
   status(): ParsedStatus | null;
   onStatus(listener: (status: ParsedStatus) => void): () => void;
+  /** Live audio frames; the workspace keeps the engine feed open while anyone listens. */
+  onAudio?(listener: (frame: AudioFrame) => void): () => void;
   navigate(route: Route, params?: Params): void;
   notify(message: string): void;
 }

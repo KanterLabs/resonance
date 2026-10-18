@@ -25,7 +25,7 @@ Usage:
   --smoke                            validate parser and API fixtures
 
 1 Play · 2 Queue · 3 Library · 4 Search · 5 Playlists · 6 Podcasts
-7 Radio · 8 Settings · 9 Cast · B Browse · ? Help
+7 Radio · 8 Settings · 9 Cast · B Browse · H Diary · ? Help
 Space play/pause · Shift+R radio · L appearance · : commands · q quit
 Ctrl+Left previous/restart · Ctrl+Right next · Ctrl+Up/Down volume ±5%
 Alt+Left/Right seek ±10 seconds · Ctrl+Z undo last skip
@@ -83,6 +83,7 @@ async function main(): Promise<void> {
   } else {
     client = new WorkspaceClient(parsed.socket!, {
       onStatus: status => app?.setStatus(status),
+      onAudio: frame => app?.setAudio(frame),
       onClose: error => app?.setConnection(false, error ? `Engine error: ${error.message}` : "Engine disconnected; reopen to attach"),
     });
     transport = client;
@@ -104,6 +105,7 @@ async function main(): Promise<void> {
     catch (error) { trace(`rpc ${method} error=${error instanceof RpcError ? error.code : "error"} duration_ms=${Math.round(performance.now() - start)}`); throw error; }
   } };
   let timer: ReturnType<typeof setInterval> | undefined;
+  let audioTimer: ReturnType<typeof setInterval> | undefined;
   app = mountWorkspace(renderer, {
     api, theme, route: parsed.route,
     reducedMotion: parsed.reducedMotion ?? (parsed.demo ? false : readReducedMotion()),
@@ -113,9 +115,12 @@ async function main(): Promise<void> {
     onNowPlayingStyleChange: parsed.demo ? undefined : saveNowPlayingStyle,
     onQuit: () => client?.close(),
   });
-  const teardown = () => { if (timer) clearInterval(timer); app.dispose(); client?.close(); if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; } };
+  const teardown = () => { if (timer) clearInterval(timer); if (audioTimer) clearInterval(audioTimer); app.dispose(); client?.close(); if (descriptor !== undefined) { closeSync(descriptor); descriptor = undefined; } };
   renderer.once("destroy", teardown);
-  if (demo) { app.setStatus(demo.status); app.setConnection(false, "Offline interactive preview"); timer = setInterval(() => demo!.tick(), 1000); }
+  if (demo) {
+    app.setStatus(demo.status); app.setConnection(false, "Offline interactive preview"); timer = setInterval(() => demo!.tick(), 1000);
+    audioTimer = setInterval(() => { const frame = demo!.audioFrame(); if (frame) app.setAudio(frame); }, 42);
+  }
   else {
     try { await client!.connect(); app.setConnection(true, "Live engine"); await api.call("settings.get"); await app.refresh(); }
     catch (error) { app.setConnection(false, `Unable to attach: ${error instanceof Error ? error.message : error}`); app.notify("Engine unavailable. Close this window and reopen Resonance; --legacy-ui remains available."); }

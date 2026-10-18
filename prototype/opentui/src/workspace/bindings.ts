@@ -26,7 +26,8 @@ export function routeForCommand(command: string): { route: Route; params?: Recor
   if (trimmed === "prototype" || trimmed === "nowplaying") return { route: "now-playing" };
   if (trimmed === "arc" || trimmed === "arc current") return { route: "arcs", params: { fromCurrent: true } };
   if (trimmed === "arcs") return { route: "arcs" };
-  const targets: Record<string, Route> = { playing: "now-playing", nowplaying: "now-playing", "now-playing": "now-playing", queue: "queue", library: "library", search: "search", browse: "browse", playlists: "playlists", podcasts: "podcasts", radio: "radio", arcs: "arcs", arc: "arcs", settings: "settings", cast: "cast", help: "help" };
+  if (["diary", "stats", "calendar", "history"].includes(trimmed)) return { route: "diary" };
+  const targets: Record<string, Route> = { playing: "now-playing", nowplaying: "now-playing", "now-playing": "now-playing", queue: "queue", library: "library", search: "search", browse: "browse", playlists: "playlists", podcasts: "podcasts", radio: "radio", arcs: "arcs", arc: "arcs", diary: "diary", settings: "settings", cast: "cast", help: "help" };
   const focus = /^focus\s+(\S+)$/.exec(trimmed);
   if (focus && targets[focus[1]!]) return { route: targets[focus[1]!] };
   const search = /^search\s+(.+)$/.exec(trimmed);

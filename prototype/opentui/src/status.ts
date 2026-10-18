@@ -48,6 +48,27 @@ export interface PrototypeStatus {
   /** Parallel to `up_next`; absent on older backends. */
   up_next_origins?: UpNextOrigin[];
   audio?: { bands: number[]; level: number; pulse: number; tempo: number | null };
+  /** Measured energy as a 0..1 rank against the library; null where unmeasured. */
+  energy?: EnergyStatus | null;
+}
+
+export interface EnergyStatus {
+  current: number | null;
+  /** Songs played just before the current one, oldest first. */
+  previous: Array<number | null>;
+  /** Parallel to `up_next`. */
+  up_next: Array<number | null>;
+}
+
+/** One frame of the engine's audio feed, sent at the subscribed rate while sound plays. */
+export interface AudioFrame {
+  live: boolean;
+  bands: number[];
+  level: number;
+  pulse: number;
+  /** Beats heard so far; a change between frames means one landed. */
+  beats: number;
+  tempo: number | null;
 }
 
 export interface ParsedStatus {
@@ -200,6 +221,37 @@ function parsePrototype(value: unknown): PrototypeStatus | null {
       pulse: clamp(finiteNumber(objectRecord(raw.audio)!.pulse), 0, 1),
       tempo: typeof objectRecord(raw.audio)!.tempo === "number" ? finiteNumber(objectRecord(raw.audio)!.tempo) : null,
     } } : {}),
+    ...(objectRecord(raw.energy) ? { energy: parseEnergy(objectRecord(raw.energy)!) } : {}),
+  };
+}
+
+function energyValue(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? clamp(value, 0, 1) : null;
+}
+
+function parseEnergy(raw: Record<string, unknown>): EnergyStatus {
+  return {
+    current: energyValue(raw.current),
+    previous: Array.isArray(raw.previous) ? raw.previous.slice(-32).map(energyValue) : [],
+    up_next: Array.isArray(raw.up_next) ? raw.up_next.slice(0, 32).map(energyValue) : [],
+  };
+}
+
+/** Parse an `{audio:{...}}` feed line; anything else returns null. */
+export function parseAudioFrame(line: string | unknown): AudioFrame | null {
+  let value: unknown = line;
+  if (typeof line === "string") {
+    try { value = JSON.parse(line); } catch { return null; }
+  }
+  const raw = objectRecord(objectRecord(value)?.audio);
+  if (!raw || typeof raw.live !== "boolean") return null;
+  return {
+    live: raw.live,
+    bands: Array.isArray(raw.bands) ? raw.bands.slice(0, 128).map(band => clamp(finiteNumber(band), 0, 1)) : [],
+    level: clamp(finiteNumber(raw.level), 0, 1),
+    pulse: clamp(finiteNumber(raw.pulse), 0, 1),
+    beats: nonNegativeInt(raw.beats),
+    tempo: typeof raw.tempo === "number" && Number.isFinite(raw.tempo) && raw.tempo > 0 ? raw.tempo : null,
   };
 }
 

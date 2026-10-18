@@ -1,9 +1,10 @@
 import type { Page, Row, ScreenFactory } from "../../workspace/contracts.js";
 import { createSurface } from "../../workspace/surface.js";
+import { coverThumbnail } from "../../workspace/thumbnails.js";
 import { cycleSearchKind, errorMessage, openResult, PageLoader, resultAction, SEARCH_PAGE_SIZE, searchKind } from "./model.js";
 
 export const createSearchScreen: ScreenFactory = (ctx, params = {}) => {
-  const surface = createSurface(ctx, "Search", "/ search • Tab category • Enter open/play • a queue • n next • s save • y share • [ / ] page • r retry");
+  const surface = createSurface(ctx, "Search", "/ search • Tab category • Enter open/play • a queue • n next • s save • y share • [ / ] page • r retry", { thumbnail: url => coverThumbnail(ctx.api, url) });
   let query = typeof params.query === "string" ? params.query.trim() : "";
   let kind = searchKind(params.kind);
   let offset = 0;

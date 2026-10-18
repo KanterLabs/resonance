@@ -1,6 +1,7 @@
-import { RGBA, StyledText, type TextChunk } from "@opentui/core";
+import type { StyledText } from "@opentui/core";
 import type { ThemeName } from "../../theme.js";
 import { blendHex } from "./motion-colors.js";
+import { PixelCanvas } from "./pixels.js";
 
 /**
  * A top-down record player in the manner of a Braun PS 500: white plinth,
@@ -20,6 +21,15 @@ export interface TurntableFrame {
   /** Label angle in radians, so the cover visibly turns while playing. */
   rotation: number;
   playing: boolean;
+  /**
+   * Strobe dot phase around the platter edge, 0..1, or null to hide them. A
+   * fixed phase reads as dots standing still, as on a deck running at speed.
+   */
+  strobe?: number | null;
+  /** 0 with the stylus in the groove, 1 with the arm back on its rest. */
+  lift?: number;
+  /** 0 with the record on the platter, 1 with it slid fully off to the left. */
+  slide?: number;
 }
 
 export const TURNTABLE_MIN_ROWS = 12;
@@ -30,6 +40,8 @@ const DECKS = {
   light: { plinth: "#f8f7f3", shadow: "#d2cfc8", platter: "#c3c2be", arm: "#a3a29d", head: "#e9e8e3", pivot: "#c7c6c1", pivotTop: "#8a8984", weight: "#5a5955", label: "#d8d4cc" },
   dark: { plinth: "#232427", shadow: "#0c0d0f", platter: "#6f6e6a", arm: "#b5b4b0", head: "#e2e1dc", pivot: "#3a3b3e", pivotTop: "#9c9b97", weight: "#55565a", label: "#4a4844" },
 } as const;
+const STROBE = { light: "#77766f", dark: "#c9c8c2" } as const;
+const MAT = "#2b2b2e";
 const VINYL = "#1a1a1c";
 const SHEEN = "#b9b9c2";
 
@@ -42,34 +54,28 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
   const rows = Math.max(TURNTABLE_MIN_ROWS, Math.min(TURNTABLE_MAX_ROWS, Math.round(frame.rows)));
   const width = turntableWidth(rows), height = rows * 2;
   const deck = DECKS[frame.theme];
-  const pixels: string[] = Array.from({ length: width * height }, () => frame.background);
-  const put = (x: number, y: number, color: string) => {
-    const px = Math.round(x), py = Math.round(y);
-    if (px >= 0 && py >= 0 && px < width && py < height) pixels[py * width + px] = color;
-  };
-  const rect = (x: number, y: number, w: number, h: number, color: string) => {
-    for (let px = Math.round(x); px < Math.round(x + w); px++) for (let py = Math.round(y); py < Math.round(y + h); py++) put(px, py, color);
-  };
-  const disc = (cx: number, cy: number, radius: number, paint: (r: number, angle: number, dx: number, dy: number) => string) => {
-    for (let px = Math.floor(cx - radius); px <= Math.ceil(cx + radius); px++) for (let py = Math.floor(cy - radius); py <= Math.ceil(cy + radius); py++) {
-      const dx = px - cx, dy = py - cy, r = Math.hypot(dx, dy);
-      if (r <= radius) put(px, py, paint(r, Math.atan2(dy, dx), dx, dy));
-    }
-  };
-  const line = (x0: number, y0: number, x1: number, y1: number, color: string) => {
-    const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2));
-    for (let i = 0; i <= steps; i++) put(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps, color);
-  };
+  const canvas = new PixelCanvas(width, height, frame.background);
 
   const plinthHeight = height - 1, plinthWidth = width - 1, k = plinthHeight / 38;
-  rect(1, plinthHeight, plinthWidth, 1, deck.shadow);
-  rect(plinthWidth, 1, 1, plinthHeight, deck.shadow);
-  rect(0, 0, plinthWidth, plinthHeight, deck.plinth);
+  canvas.rect(1, plinthHeight, plinthWidth, 1, deck.shadow);
+  canvas.rect(plinthWidth, 1, 1, plinthHeight, deck.shadow);
+  canvas.rect(0, 0, plinthWidth, plinthHeight, deck.plinth);
 
   const cx = 17 * k, cy = 19 * k, radius = 15 * k, label = 5.5 * k;
-  disc(cx, cy, radius + 1.5 * k, () => deck.platter);
+  canvas.disc(cx, cy, radius + 1.5 * k, () => deck.platter);
+  if (frame.strobe !== null && frame.strobe !== undefined) {
+    const dots = 32, ring = radius + 0.9 * k;
+    for (let i = 0; i < dots; i++) {
+      const angle = (i + frame.strobe) / dots * Math.PI * 2;
+      canvas.put(cx + ring * Math.cos(angle), cy + ring * Math.sin(angle), STROBE[frame.theme]);
+    }
+  }
+  const slide = Math.max(0, Math.min(1, frame.slide ?? 0));
+  if (slide > 0) canvas.disc(cx, cy, radius - 0.5, r => r < 0.8 ? "#d8d8dc" : MAT);
+  // The record leaves to the left, clear of the arm on the right.
+  const rx = cx - slide * (cx + radius + 2);
   const cos = Math.cos(frame.rotation), sin = Math.sin(frame.rotation);
-  disc(cx, cy, radius, (r, angle, dx, dy) => {
+  canvas.disc(rx, cy, radius, (r, angle, dx, dy) => {
     if (r < 0.8) return "#d8d8dc";
     if (r < label) {
       // Rotate the sample point, not the disc, so the label turns cleanly.
@@ -89,12 +95,11 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
   });
 
   const pivotX = 38 * k, pivotY = 6 * k, armLength = 22 * k;
-  let tipX: number, tipY: number;
-  if (frame.progress === null) {
-    // Parked beside the platter on its rest.
-    tipX = pivotX + 0.6 * k; tipY = pivotY + armLength;
-    rect(tipX - 1, tipY + 1.5, 3, 1.5, deck.pivot);
-  } else {
+  // Parked beside the platter on its rest.
+  const restX = pivotX + 0.6 * k, restY = pivotY + armLength;
+  canvas.rect(restX - 1, restY + 1.5, 3, 1.5, deck.pivot);
+  let tipX = restX, tipY = restY;
+  if (frame.progress !== null) {
     // The stylus sits where the playhead is, travelling from edge to label.
     const needle = radius - 1.5 * k - (radius - 8 * k) * Math.max(0, Math.min(1, frame.progress));
     const distance = Math.hypot(pivotX - cx, pivotY - cy);
@@ -104,26 +109,19 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
     const bx = cx + along * ux, by = cy + along * uy;
     // The arm can reach that groove at two points; the lower one is the one a
     // pivot at the top right swings to.
-    [tipX, tipY] = by - across * ux > by + across * ux ? [bx + across * uy, by - across * ux] : [bx - across * uy, by + across * ux];
+    const [grooveX, grooveY] = by - across * ux > by + across * ux ? [bx + across * uy, by - across * ux] : [bx - across * uy, by + across * ux];
+    // Swing between groove and rest around the pivot, so a lift reads as an arc.
+    const lift = Math.max(0, Math.min(1, frame.lift ?? 0));
+    const from = Math.atan2(grooveY - pivotY, grooveX - pivotX), to = Math.atan2(restY - pivotY, restX - pivotX);
+    const angle = from + (to - from) * lift;
+    tipX = pivotX + armLength * Math.cos(angle); tipY = pivotY + armLength * Math.sin(angle);
   }
   const backX = pivotX + (pivotX - tipX) * 0.22, backY = pivotY + (pivotY - tipY) * 0.22;
-  line(pivotX, pivotY, backX, backY, deck.arm);
-  rect(backX - 1, backY - 1, 3, 3, deck.weight);
-  disc(pivotX, pivotY, 2.6 * Math.max(1, k * 0.8), r => r < 1.3 ? deck.pivotTop : deck.pivot);
-  line(pivotX, pivotY, tipX, tipY, deck.arm);
-  rect(tipX - 1, tipY - 1, 2, 3, deck.head);
-  rect(37 * k, 31 * k, 3 * k, 3 * k, frame.playing ? TURNTABLE_ORANGE : blendHex(deck.plinth, TURNTABLE_ORANGE, 0.45));
-
-  return Array.from({ length: rows }, (_, row) => {
-    const chunks: TextChunk[] = [];
-    let run = "", top = "", bottom = "";
-    const flush = () => { if (run) chunks.push({ __isChunk: true, text: run, fg: RGBA.fromHex(top), bg: RGBA.fromHex(bottom) }); };
-    for (let x = 0; x < width; x++) {
-      const upper = pixels[row * 2 * width + x]!, lower = pixels[(row * 2 + 1) * width + x]!;
-      if (run && upper === top && lower === bottom) { run += "▀"; continue; }
-      flush(); run = "▀"; top = upper; bottom = lower;
-    }
-    flush();
-    return new StyledText(chunks);
-  });
+  canvas.line(pivotX, pivotY, backX, backY, deck.arm);
+  canvas.rect(backX - 1, backY - 1, 3, 3, deck.weight);
+  canvas.disc(pivotX, pivotY, 2.6 * Math.max(1, k * 0.8), r => r < 1.3 ? deck.pivotTop : deck.pivot);
+  canvas.line(pivotX, pivotY, tipX, tipY, deck.arm);
+  canvas.rect(tipX - 1, tipY - 1, 2, 3, deck.head);
+  canvas.rect(37 * k, 31 * k, 3 * k, 3 * k, frame.playing ? TURNTABLE_ORANGE : blendHex(deck.plinth, TURNTABLE_ORANGE, 0.45));
+  return canvas.lines();
 }

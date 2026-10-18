@@ -2,6 +2,7 @@ import { DEMO_TRACKS, demoStatus, type ParsedStatus, type Playable, type Track }
 import { RpcError } from "./client.js";
 import { RPC_VERSION, type Page, type Params, type Row, type RpcApi } from "./contracts.js";
 import { DemoArcs } from "./demo-arcs.js";
+import { demoAudioFrame, demoCalendar, demoCover, demoCoverUrl, demoEnergy, demoSongMap } from "./demo-visuals.js";
 
 const source = "offline preview";
 const clone = <T>(value: T): T => structuredClone(value);
@@ -23,7 +24,9 @@ export class DemoApi implements RpcApi {
   private undoSkip: { currentId: string; playable: Playable; mode: ParsedStatus["mode"]; position: number; token: number; revision: number } | null = null;
   private radioSeed: Track | null = null;
   private values: Params = { volume: 68, repeat: "off", shuffle: false, demo: true, source, logged_in: true };
-  private tracks: Row[] = DEMO_TRACKS.map(track => ({ id: track.id!, kind: "track", title: track.title, subtitle: track.artists.join(" · "), detail: track.album, uri: `spotify:track:${track.id}`, duration_ms: track.duration, saved: true }));
+  private tracks: Row[] = DEMO_TRACKS.map(track => ({ id: track.id!, kind: "track", title: track.title, subtitle: track.artists.join(" · "), detail: track.album, uri: `spotify:track:${track.id}`, duration_ms: track.duration, saved: true, cover_url: demoCoverUrl(track.id!) }));
+  /** Whether a frontend asked for the audio feed; the demo then synthesizes one. */
+  audioSubscribed = false;
   private queue: Row[] = this.tracks.map((row, i) => ({ ...row, id: `entry-${i + 1}`, meta: { playable_id: row.id } }));
   private albums: Row[] = DEMO_TRACKS.map((track, i) => ({ id: `album-${i}`, kind: "album", title: track.album, subtitle: track.artists[0]!, uri: `spotify:album:demo-${i}`, saved: true }));
   private artists: Row[] = DEMO_TRACKS.map((track, i) => ({ id: `artist-${i}`, kind: "artist", title: track.artists[0]!, subtitle: "Demo artist", uri: `spotify:artist:demo-${i}`, saved: true }));
@@ -36,6 +39,8 @@ export class DemoApi implements RpcApi {
 
   private arcs = new DemoArcs(() => this.tracks, () => this.status.playable?.uri, uri => this.player({ action: "play", uri }));
   constructor(private onStatus?: (status: ParsedStatus) => void) { this.status.playable = this.playable(this.queue[0]!); this.publish(); }
+  /** One synthesized audio frame, or null while nobody listens. */
+  audioFrame(nowMs = Date.now()) { return this.audioSubscribed ? demoAudioFrame(nowMs, this.status.mode.kind === "playing") : null; }
   tick(): void {
     if (this.status.mode.kind !== "playing") return;
     const position = (this.status.prototype?.position_ms ?? 0) + 1_000;
@@ -48,6 +53,8 @@ export class DemoApi implements RpcApi {
     this.status.prototype!.up_next = upcoming.map(row => this.playable(row) as Track);
     this.status.prototype!.up_next_origins = upcoming.map(row => row.meta?.origin === "explicit" ? "explicit" : "context");
     this.status.prototype!.radio_waiting = this.status.prototype!.radio_active && upcoming.length === 0;
+    const past = this.queue.slice(0, Math.max(0, this.queue.findIndex(row => row.id === this.currentId))).slice(-12);
+    this.status.prototype!.energy = { current: demoEnergy(this.status.playable?.uri), previous: past.map(row => demoEnergy(row.uri)), up_next: upcoming.map(row => demoEnergy(row.uri)) };
     this.onStatus?.(clone(this.status));
   }
   private futureQueue(): Row[] {
@@ -57,7 +64,8 @@ export class DemoApi implements RpcApi {
   private playable(row: Row): Playable {
     if (row.kind === "episode") return { type: "Episode", id: row.id, uri: row.uri, name: row.title, duration: row.duration_ms ?? 0 };
     const original = DEMO_TRACKS.find(track => row.uri === `spotify:track:${track.id}`);
-    return { ...(original ?? DEMO_TRACKS[0]!), id: row.meta?.playable_id as string ?? row.id, uri: row.uri, title: row.title, duration: row.duration_ms ?? 0 };
+    const id = row.meta?.playable_id as string ?? row.id;
+    return { ...(original ?? DEMO_TRACKS[0]!), id, uri: row.uri, title: row.title, duration: row.duration_ms ?? 0, cover_url: demoCoverUrl(original?.id ?? id) };
   }
   private play(row: Row): void { this.currentId = row.id; this.status.playable = this.playable(row); this.status.mode = { kind: "playing", startedAtMs: Date.now() }; this.status.prototype!.position_ms = 0; this.played++; this.publish(); }
   private next(delta: number): void {
@@ -120,7 +128,11 @@ export class DemoApi implements RpcApi {
       }
       case "player.action": return this.player(p);
       case "player.status": return { source, current: this.status.playable, repeat: this.repeat, shuffle: this.shuffled, saved: this.tracks.find(row => row.uri === this.status.playable?.uri)?.saved ?? false };
-      case "player.artwork": return { source, available: false, uri: p.uri ?? this.status.playable?.uri ?? null, width: p.width ?? 20, height: p.height ?? 10, reason: "offline_preview" };
+      case "player.artwork": {
+        const uri = (p.uri as string | undefined) ?? this.status.playable?.uri ?? null, width = Math.min(40, Math.max(1, Number(p.width ?? 20))), height = Math.min(20, Math.max(1, Number(p.height ?? 10)));
+        const cover = this.status.playable?.cover_url;
+        return uri && uri === this.status.playable?.uri && cover ? { source, available: true, uri, width, height, pixels: demoCover(cover, width, height) } : { source, available: false, uri, width, height, reason: "offline_preview" };
+      }
       case "queue.action": return this.queueAction(p);
       case "library.action": {
         const action = string(p, "action"); if (action === "refresh") return { source, refreshed: true };
@@ -154,6 +166,18 @@ export class DemoApi implements RpcApi {
         const target = action === "connect" ? this.casts.find(row => row.id === p.id) : undefined; if (action === "connect" && !target) fail("not_found", "Demo device not found");
         this.casts.forEach(row => { row.meta = { ...row.meta, active: row === target, is_active: row === target }; row.detail = row === target ? "Connected (simulated)" : "Available (simulated)"; }); return { source, connected: target?.id ?? null };
       }
+      case "artwork.cover": {
+        const url = string(p, "url"), width = Math.min(40, Math.max(1, Number(p.width ?? 20))), height = Math.min(20, Math.max(1, Number(p.height ?? 10)));
+        return url.startsWith("https://i.scdn.co/image/offline-demo-") ? { available: true, url, width, height, pixels: demoCover(url, width, height) } : { available: false, url, width, height, reason: "offline_preview" };
+      }
+      case "song.map": {
+        const uri = typeof p.uri === "string" ? p.uri : this.status.playable?.uri;
+        if (!uri) return fail("not_found", "No track to map");
+        return { uri, duration_ms: this.status.playable?.duration ?? 0, buckets: 200, heard: 1, level: demoSongMap(uri) };
+      }
+      case "audio.subscribe": this.audioSubscribed = true; return { subscribed: true, fps: Number(p.fps ?? 24), bands: Number(p.bands ?? 16), waveform: 0 };
+      case "audio.unsubscribe": this.audioSubscribed = false; return { subscribed: false };
+      case "listening.calendar": return demoCalendar(Math.min(400, Math.max(7, Number(p.days ?? 371))));
       case "share": { const uri = string(p, "uri"); this.byUri(uri); return { source, url: `Offline demo link (fictional): https://open.spotify.com/${uri.split(":").slice(1).join("/")}`, demo: true }; }
       default: return fail("unknown_method", `Unknown demo method: ${method}`);
     }

@@ -47,6 +47,7 @@ In the legacy interface, F5 / `:prototype` still opens a separate companion term
 | 5 | Playlists | Create, rename, delete, inspect tracks, add/remove tracks |
 | 6 | Podcasts | Saved shows, episodes, playback and queue actions |
 | 7 | Radio | Station start/stop, Discovery adjustment, local diagnostics |
+| H | Diary | A year of listening as a heatmap, and this month's most played artists |
 | 0 | Arc Studio | Auto-built arc from the playing song; shapes, length, mix, swap/keep/remove, play from a track, save ([guide](playlist-builder.md)) |
 | 8 | Settings | Configuration inspection, reload, reconnect, logout, motion preference |
 | ? | Help | Effective workspace/configured bindings and command entry |
@@ -81,6 +82,34 @@ saved suggestions do not consume catalog positions.
 Cached results remain usable when a refresh fails; **Ctrl+R** retries in quick search.
 Search errors distinguish rejected requests, authentication, access, network, incompatible
 responses, and actual rate limits. Rate-limit errors include the remaining wait when available.
+
+## Turntable, diary and idle screen
+
+Now Playing opens on a turntable drawn after the Braun PS 500 (**v** switches to the classic
+player). Each part shows something real:
+
+- The cover is printed on the label and turns with the playhead; the tonearm's place on the
+  record is the progress. When the song changes, the arm lifts, the record slides off, the next
+  one drops on and the arm sets down. Reduced motion skips the swap.
+- Strobe dots around the platter stand still while the audio tap holds a tempo and drift while
+  it searches for one.
+- A VU meter beside the deck follows the live audio level with a moving-coil needle's swing.
+- The progress bar is the song's own loudness, from the shape the background sampler learns as
+  songs play (`song.map`). Stretches not yet heard draw as a flat baseline.
+- On wide terminals the queue appears as a crate of records, each spine in its cover's colour.
+
+The deck subscribes to the engine's audio feed (`audio.subscribe`) only while it is showing.
+Search results show a small cover beside two lines of text. On wide terminals the footer maps
+the session's measured energy, picks out the playing song and says whether the next one lifts,
+calms or holds things.
+
+**H** opens the listening diary: one square a day for the last year, shaded by minutes listened,
+and this month's top artists. The engine keeps it in `listening-diary.json` in its cache
+directory, counting a play once at least 30 seconds were heard or the song finished.
+
+After three minutes without a key press while music plays, the workspace rests on an idle screen:
+the cover large, the song, a spectrum and the clock over a background that breathes in the
+cover's colour. Any key or click returns; the waking key does nothing else. `:idle` opens it.
 
 ## Appearance, audio, and covers
 
@@ -122,7 +151,7 @@ resonance-opentui --demo --theme dark --route queue --reduced-motion
 
 `--demo` is an offline interactive fixture and does not save preferences. `--route` accepts every
 route name in the workspace contract: `now-playing`, `queue`, `library`, `search`, `browse`,
-`playlists`, `podcasts`, `radio`, `settings`, `help`, and `cast`.
+`playlists`, `podcasts`, `radio`, `arcs`, `diary`, `settings`, `help`, and `cast`.
 
 ## Local API and debugging
 

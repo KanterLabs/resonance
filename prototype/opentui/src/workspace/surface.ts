@@ -1,4 +1,4 @@
-import { BoxRenderable, InputRenderable, ScrollBoxRenderable, TextRenderable, type Renderable } from "@opentui/core";
+import { BoxRenderable, InputRenderable, ScrollBoxRenderable, TextRenderable, type Renderable, type StyledText } from "@opentui/core";
 import { paletteForTheme, type ThemeName } from "../theme.js";
 import type { Row, ScreenContext, ScreenKey } from "./contracts.js";
 
@@ -21,17 +21,31 @@ export interface Surface {
   dispose(): void;
 }
 
+export interface SurfaceOptions {
+  /**
+   * Draw a small cover before each row that has a `cover_url`, making rows two
+   * lines tall. Resolves to the cover's drawn lines, or null without one.
+   */
+  thumbnail?: (url: string) => Promise<StyledText[] | null>;
+}
+/** Thumbnail size in cells: four columns by two rows, so four by four pixels. */
+export const THUMBNAIL = { width: 4, height: 2 } as const;
+
+interface RowParts { label: TextRenderable; sub?: TextRenderable; thumb?: TextRenderable[] }
+
 let serial = 0;
 // Native text layout handles cell widths and truncation, including wide glyphs.
 const singleLine = (value: string) => value.replace(/[\r\n\t]/g, " ").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
 
-export function createSurface(ctx: ScreenContext, title: string, hintText: string): Surface {
+export function createSurface(ctx: ScreenContext, title: string, hintText: string, options: SurfaceOptions = {}): Surface {
   const id = `surface-${++serial}`;
   let palette = paletteForTheme(ctx.theme());
   let disposed = false;
   let rows: Row[] = [];
   let index = -1;
   let rowNodes: BoxRenderable[] = [];
+  let rowParts: RowParts[] = [];
+  const thumbnails = new Map<string, StyledText[] | null | "pending">();
   let textNodes: TextRenderable[] = [];
   let activate: ((row: Row) => void) | undefined;
   let messageError = false;
@@ -53,14 +67,41 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
 
   function clearContent() {
     for (const child of rowNodes) { scroll.remove(child); child.destroyRecursively(); }
-    rowNodes = []; lastClick = undefined;
+    rowNodes = []; rowParts = []; lastClick = undefined;
+  }
+  function paintThumbnail(i: number) {
+    const parts = rowParts[i], url = rows[i]?.cover_url;
+    if (!parts?.thumb) return;
+    const drawn = url ? thumbnails.get(url) : null;
+    parts.thumb.forEach((node, line) => {
+      if (Array.isArray(drawn) && drawn[line]) { node.content = drawn[line]!; node.bg = "transparent"; }
+      else { node.content = " ".repeat(THUMBNAIL.width); node.bg = palette.cover; }
+    });
+  }
+  function requestThumbnails() {
+    const load = options.thumbnail;
+    if (!load) return;
+    for (const url of new Set(rows.map(row => row.cover_url).filter((url): url is string => !!url))) {
+      if (thumbnails.has(url)) continue;
+      thumbnails.set(url, "pending");
+      load(url).then(drawn => { thumbnails.set(url, drawn); }, () => { thumbnails.set(url, null); }).finally(() => {
+        if (disposed) return;
+        rows.forEach((row, i) => { if (row.cover_url === url) paintThumbnail(i); });
+      });
+    }
   }
   function paintSelection() {
     rowNodes.forEach((node, i) => {
       node.backgroundColor = i === index ? palette.queueCurrent : palette.panel;
-      const label = node.getChildren()[0] as TextRenderable;
+      const { label, sub } = rowParts[i]!, row = rows[i]!;
       label.fg = i === index ? palette.text : palette.muted;
-      label.content = `${i === index ? "›" : " "} ${singleLine(rows[i]!.title)}${rows[i]!.saved ? " [saved]" : ""}${rows[i]!.subtitle ? ` · ${singleLine(rows[i]!.subtitle)}` : ""}${rows[i]!.detail ? `  ${singleLine(rows[i]!.detail!)}` : ""}`;
+      const subtitle = `${row.subtitle ? singleLine(row.subtitle) : ""}${row.detail ? `${row.subtitle ? "  " : ""}${singleLine(row.detail)}` : ""}`;
+      if (sub) {
+        // Two-line rows: the title above, who and where below it.
+        label.content = `${i === index ? "›" : " "} ${singleLine(row.title)}${row.saved ? " [saved]" : ""}`;
+        sub.content = `  ${subtitle}`; sub.fg = palette.dim;
+      } else label.content = `${i === index ? "›" : " "} ${singleLine(row.title)}${row.saved ? " [saved]" : ""}${row.subtitle ? ` · ${singleLine(row.subtitle)}` : ""}${row.detail ? `  ${singleLine(row.detail)}` : ""}`;
+      paintThumbnail(i);
     });
   }
   function select(next: number) {
@@ -96,7 +137,8 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
       const oldIndex = index;
       clearContent(); rows = [...next]; activate = onActivate; scroll.visible = true;
       rows.forEach((row, i) => {
-        const node = new BoxRenderable(ctx.renderer, { id: `${id}-row-${i}`, height: 1, flexShrink: 0, minWidth: 0, backgroundColor: palette.panel, onMouseDown(event) {
+        const thumbs = !!options.thumbnail;
+        const node = new BoxRenderable(ctx.renderer, { id: `${id}-row-${i}`, height: thumbs ? THUMBNAIL.height : 1, flexShrink: 0, minWidth: 0, ...(thumbs ? { flexDirection: "row" as const, gap: 1 } : {}), backgroundColor: palette.panel, onMouseDown(event) {
           if (event.button !== 0 || overlay) return;
           select(i);
           const now = Date.now();
@@ -104,11 +146,19 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
           else lastClick = { id: row.id, at: now };
           event.preventDefault();
         } });
-        node.add(new TextRenderable(ctx.renderer, { width: "100%", height: 1, content: "", truncate: true, wrapMode: "none", selectable: false, fg: palette.text, bg: "transparent" }));
+        const text = (parent: BoxRenderable) => { const label = new TextRenderable(ctx.renderer, { width: "100%", height: 1, content: "", truncate: true, wrapMode: "none", selectable: false, fg: palette.text, bg: "transparent" }); parent.add(label); return label; };
+        if (thumbs) {
+          const cover = new BoxRenderable(ctx.renderer, { id: `${id}-row-${i}-cover`, width: THUMBNAIL.width, height: THUMBNAIL.height, flexShrink: 0, flexDirection: "column" });
+          const words = new BoxRenderable(ctx.renderer, { flexGrow: 1, minWidth: 0, height: THUMBNAIL.height, flexDirection: "column" });
+          node.add(cover); node.add(words);
+          const thumb = Array.from({ length: THUMBNAIL.height }, () => { const line = new TextRenderable(ctx.renderer, { width: THUMBNAIL.width, height: 1, content: "", selectable: false }); cover.add(line); return line; });
+          rowParts.push({ label: text(words), sub: text(words), thumb });
+        } else rowParts.push({ label: text(node) });
         rowNodes.push(node); scroll.add(node);
       });
       const found = rows.findIndex(row => row.id === stableId);
       select(found >= 0 ? found : Math.max(0, oldIndex));
+      requestThumbnails();
     },
     selected: () => rows[index],
     move(delta) { select(index + delta); }, select,
@@ -171,7 +221,7 @@ export function createSurface(ctx: ScreenContext, title: string, hintText: strin
       overlay!.add(input); input.focus();
     },
     editing: () => !!overlay,
-    dispose() { if (disposed) return; closeOverlay(false); disposed = true; root.destroyRecursively(); rows = []; rowNodes = []; textNodes = []; activate = undefined; },
+    dispose() { if (disposed) return; closeOverlay(false); disposed = true; root.destroyRecursively(); rows = []; rowNodes = []; rowParts = []; textNodes = []; activate = undefined; thumbnails.clear(); },
   };
   return surface;
 }
