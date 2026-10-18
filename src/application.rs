@@ -448,6 +448,7 @@ impl Application {
         crate::builder::fingerprint::flush();
         crate::builder::preview::shared().save();
         crate::song_map::flush();
+        crate::listening_diary::flush();
         Ok(())
     }
 }

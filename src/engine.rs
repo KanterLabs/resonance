@@ -302,6 +302,7 @@ impl Engine {
         crate::builder::fingerprint::flush();
         crate::builder::preview::shared().save();
         crate::song_map::flush();
+        crate::listening_diary::flush();
         self.queue.cancel_radio();
         let queue = self.queue.queue.read().unwrap().clone();
         let random_order = self.queue.get_random_order();

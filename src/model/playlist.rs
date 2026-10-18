@@ -23,6 +23,10 @@ pub struct Playlist {
     pub num_tracks: usize,
     pub tracks: Option<Vec<Playable>>,
     pub collaborative: bool,
+    /// The largest cover Spotify lists. Caches written before this field existed load
+    /// without one, and the next library sync fills it in.
+    #[serde(default)]
+    pub cover_url: Option<String>,
 }
 
 impl Playlist {
@@ -157,6 +161,7 @@ impl From<&SimplifiedPlaylist> for Playlist {
             num_tracks: list.items.total as usize,
             tracks: None,
             collaborative: list.collaborative,
+            cover_url: list.images.first().map(|image| image.url.clone()),
         }
     }
 }
@@ -172,6 +177,7 @@ impl From<&FullPlaylist> for Playlist {
             num_tracks: list.items.total as usize,
             tracks: None,
             collaborative: list.collaborative,
+            cover_url: list.images.first().map(|image| image.url.clone()),
         }
     }
 }

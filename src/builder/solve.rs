@@ -134,7 +134,8 @@ fn album_key(track: &Track) -> Option<String> {
         .or_else(|| track.album.as_ref().map(|album| album.to_lowercase()))
 }
 
-fn percentile(sorted: &[f32], value: f32) -> f64 {
+/// Where `value` falls among `sorted`: the share strictly below, ties counted half.
+pub(crate) fn percentile(sorted: &[f32], value: f32) -> f64 {
     let below = sorted.partition_point(|other| *other < value);
     let equal = sorted[below..].partition_point(|other| *other <= value);
     (below as f64 + equal as f64 / 2.0) / sorted.len() as f64

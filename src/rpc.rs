@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod builder;
+mod visuals;
 
 pub const VERSION: u64 = 1;
 const METHODS: &[&str] = &[
@@ -25,6 +26,8 @@ const METHODS: &[&str] = &[
     "player.status",
     "player.action",
     "player.artwork",
+    "artwork.cover",
+    "listening.calendar",
     "audio.subscribe",
     "audio.unsubscribe",
     "song.map",
@@ -148,6 +151,14 @@ fn row(
 ) -> Value {
     json!({"id":id.into(),"kind":kind,"title":title.into(),"subtitle":subtitle.into(),"uri":uri})
 }
+/// Attach a row's cover, leaving the key out rather than null when there is none,
+/// so a client can tell "no art" from "art not asked for" without a second check.
+fn with_cover(mut r: Value, url: Option<&String>) -> Value {
+    if let Some(url) = url.filter(|url| !url.trim().is_empty()) {
+        r["cover_url"] = json!(url);
+    }
+    r
+}
 fn track(t: &Track) -> Value {
     let mut r = row(
         t.id.clone().unwrap_or_else(|| t.uri.clone()),
@@ -159,7 +170,7 @@ fn track(t: &Track) -> Value {
     r["duration_ms"] = json!(t.duration);
     r["detail"] = json!(t.album);
     r["meta"] = json!({"added_at":t.added_at});
-    r
+    with_cover(r, t.cover_url.as_ref())
 }
 /// Text relevance wins; saved status and positive listening history only break
 /// ties. Remote rows are never filtered, since Spotify can match metadata that
@@ -252,16 +263,17 @@ fn album(a: &Album) -> Value {
         a.id.as_ref().map(|id| format!("spotify:album:{id}")),
     );
     r["meta"] = json!({"added_at":a.added_at});
-    r
+    with_cover(r, a.cover_url.as_ref())
 }
 fn artist(a: &Artist) -> Value {
-    row(
+    let r = row(
         a.id.clone().unwrap_or_default(),
         "artist",
         &a.name,
         "",
         a.id.as_ref().map(|id| format!("spotify:artist:{id}")),
-    )
+    );
+    with_cover(r, a.cover_url.as_ref())
 }
 fn playlist(p: &Playlist) -> Value {
     let mut r = row(
@@ -272,12 +284,12 @@ fn playlist(p: &Playlist) -> Value {
         Some(format!("spotify:playlist:{}", p.id)),
     );
     r["detail"] = json!(format!("{} tracks", p.num_tracks));
-    r
+    with_cover(r, p.cover_url.as_ref())
 }
 fn show(s: &Show) -> Value {
     let mut r = row(&s.id, "show", &s.name, "", Some(s.uri.clone()));
     r["detail"] = json!(s.description);
-    r
+    with_cover(r, s.cover_url.as_ref())
 }
 fn episode(e: &Episode) -> Value {
     let mut r = row(
@@ -289,7 +301,7 @@ fn episode(e: &Episode) -> Value {
     );
     r["duration_ms"] = json!(e.duration);
     r["detail"] = json!(e.description);
-    r
+    with_cover(r, e.cover_url.as_ref())
 }
 fn unavailable_artwork(uri: Option<&str>, width: usize, height: usize, reason: &str) -> Value {
     json!({
@@ -858,6 +870,8 @@ impl RpcService {
             }
             "player.action" => self.player_action(p),
             "player.artwork" => self.player_artwork(p),
+            "artwork.cover" => visuals::cover(&self.artwork, p),
+            "listening.calendar" => visuals::calendar(&crate::listening_diary::shared(), p),
             // The feed itself belongs to the connection, which reads these results to
             // start or stop it. Here they are only checked and filled in.
             "audio.subscribe" => {
@@ -1960,7 +1974,7 @@ impl RpcService {
 mod tests {
     use super::*;
     use crate::artwork::ArtworkImage;
-    fn service() -> RpcService {
+    pub(super) fn service() -> RpcService {
         let config = Config::new_for_test();
         let events = EventManager::new();
         let spotify = crate::spotify::Spotify::new_for_test(config.clone(), events.clone());
@@ -2028,7 +2042,7 @@ mod tests {
         }
     }
 
-    fn fixture_track(identity: &str, title: &str, index: usize) -> Track {
+    pub(super) fn fixture_track(identity: &str, title: &str, index: usize) -> Track {
         Track {
             id: Some(identity.to_owned()),
             uri: format!("spotify:track:{identity}"),
@@ -2360,6 +2374,7 @@ mod tests {
                 Playable::Track(beta),
             ]),
             collaborative: false,
+            cover_url: None,
         });
         service
             .player_action(&json!({"action":"play","uri":"spotify:playlist:FixturePlaylist"}))

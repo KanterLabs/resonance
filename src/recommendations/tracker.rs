@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::history::{History, Outcome};
+use crate::listening_diary::{self, ListeningDiary};
 use crate::model::track::Track;
 
 struct Session {
@@ -14,13 +15,20 @@ struct Session {
 
 pub struct Tracker {
     history: Arc<History>,
+    /// The listening calendar's ledger, fed from the same finished listens.
+    diary: Arc<ListeningDiary>,
     active: Option<Session>,
 }
 
 impl Tracker {
     pub fn new(history: Arc<History>) -> Self {
+        Self::with_diary(history, listening_diary::shared())
+    }
+
+    fn with_diary(history: Arc<History>, diary: Arc<ListeningDiary>) -> Self {
         Self {
             history,
+            diary,
             active: None,
         }
     }
@@ -90,6 +98,7 @@ impl Tracker {
             _ => Outcome::Neutral,
         };
         self.history.record(&session.track, outcome, listened_ms);
+        self.diary.record(&session.track, outcome, listened_ms);
     }
 }
 
@@ -150,5 +159,24 @@ mod tests {
         let snapshot = history.snapshot();
         assert_eq!(snapshot["spotify:track:seed"].completed, 2);
         assert_eq!(snapshot["spotify:track:seed"].plays, 2);
+    }
+
+    #[test]
+    fn the_diary_counts_listens_of_thirty_seconds_or_completed_ones() {
+        let diary = Arc::new(ListeningDiary::default());
+        let mut tracker = Tracker::with_diary(super::super::history::shared(), diary.clone());
+        let at = Instant::now();
+        // Ten seconds and skipped: in the radio history, but not a play.
+        tracker.observe_at(Some(track()), true, at);
+        tracker.finish_at(Outcome::EarlySkip, at + Duration::from_secs(10));
+        assert!(diary.calendar(7).days.is_empty());
+        // Forty seconds, then moved on: a play, though not a completed one.
+        tracker.observe_at(Some(track()), true, at);
+        tracker.finish_at(Outcome::Neutral, at + Duration::from_secs(40));
+        tracker.observe_at(Some(track()), true, at);
+        tracker.finish_at(Outcome::Completed, at + Duration::from_secs(180));
+        // Summed, since the two listens may straddle midnight.
+        let plays: u32 = diary.calendar(7).days.iter().map(|day| day.plays).sum();
+        assert_eq!(plays, 2);
     }
 }

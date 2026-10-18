@@ -547,6 +547,16 @@ impl Library {
                         );
                         last_save = Instant::now();
                     }
+                } else if let Some(local) = self
+                    .playlists
+                    .write()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|local| local.id == remote.id)
+                {
+                    // A cover can change without a new snapshot, and lists cached before
+                    // covers were kept have none.
+                    local.cover_url.clone_from(&remote.cover_url);
                 }
             }
             lists_batch = lists_page.next();
@@ -608,6 +618,9 @@ impl Library {
             let pos = store.iter().position(|a| a.id == artist.id);
             if let Some(i) = pos {
                 store[i].is_followed = true;
+                if artist.cover_url.is_some() {
+                    store[i].cover_url = artist.cover_url;
+                }
                 continue;
             }
 

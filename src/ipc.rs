@@ -25,6 +25,8 @@ use crate::traits::ListItem;
 use resonance::BIN_NAME;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 
+mod energy;
+
 pub struct IpcSocket {
     tx: Sender<Status>,
     path: PathBuf,
@@ -50,6 +52,7 @@ struct PrototypeStatus {
     up_next: Vec<Track>,
     up_next_origins: Vec<String>,
     audio: Option<AudioStatus>,
+    energy: Option<energy::EnergyStatus>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -150,10 +153,23 @@ impl Status {
             .into_iter()
             .filter_map(|(index, item)| item.track().map(|track| (index, track)))
             .collect();
+        let up_next: Vec<Track> = upcoming.iter().map(|(_, track)| track.clone()).collect();
+        let current = queue.get_current();
+        let previous: Vec<Playable> = queue.get_current_index().map_or_else(Vec::new, |index| {
+            let items = queue.queue.read().unwrap();
+            let index = index.min(items.len());
+            items[index.saturating_sub(energy::PREVIOUS)..index].to_vec()
+        });
+        let energy = energy::status(
+            &crate::builder::fingerprint::shared(),
+            current.as_ref(),
+            &previous,
+            &up_next,
+        );
         Self {
             notifications: spotify.events().notifications(),
             mode: spotify.get_current_status(),
-            playable: queue.get_current(),
+            playable: current,
             prototype: PrototypeStatus {
                 position_ms: spotify
                     .get_current_progress()
@@ -163,7 +179,7 @@ impl Status {
                 volume_percent: (f64::from(spotify.volume()) / 65535.0 * 100.0).round() as u16,
                 radio_active: queue.radio_active(),
                 radio_waiting: queue.radio_waiting() || queue.radio_natural_end(),
-                up_next: upcoming.iter().map(|(_, track)| track.clone()).collect(),
+                up_next,
                 up_next_origins: upcoming
                     .iter()
                     .map(|(index, _)| queue.queue_origin(*index).to_owned())
@@ -177,6 +193,7 @@ impl Status {
                         tempo: tap.tempo(),
                     }
                 }),
+                energy,
             },
         }
     }
@@ -592,6 +609,7 @@ mod tests {
             num_tracks: 3,
             tracks: Some(items.clone()),
             collaborative: true,
+            cover_url: None,
         });
         library.shows.write().unwrap().push(Show {
             id: "FixtureShow00000000001".to_owned(),

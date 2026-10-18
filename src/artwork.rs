@@ -23,7 +23,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(any(feature = "album_art", feature = "cover"))]
 use std::time::Duration;
-#[cfg(any(feature = "album_art", feature = "cover"))]
 use url::Url;
 
 pub const DEFAULT_WIDTH: usize = 20;
@@ -321,9 +320,7 @@ impl ArtworkCache {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArtworkError {
     InvalidDimensions,
-    #[cfg(any(feature = "album_art", feature = "cover"))]
     InvalidUrl,
-    #[cfg(any(feature = "album_art", feature = "cover"))]
     UnsupportedUrl,
     #[cfg(not(any(feature = "album_art", feature = "cover")))]
     FeatureDisabled,
@@ -341,9 +338,7 @@ impl ArtworkError {
     pub const fn reason(self) -> &'static str {
         match self {
             Self::InvalidDimensions => "invalid_dimensions",
-            #[cfg(any(feature = "album_art", feature = "cover"))]
             Self::InvalidUrl => "invalid_cover_url",
-            #[cfg(any(feature = "album_art", feature = "cover"))]
             Self::UnsupportedUrl => "unsupported_cover_url",
             #[cfg(not(any(feature = "album_art", feature = "cover")))]
             Self::FeatureDisabled => "image_support_unavailable",
@@ -357,6 +352,24 @@ impl ArtworkError {
             Self::CacheUnavailable => "cover_cache_unavailable",
         }
     }
+}
+
+/// Accept only an https URL on a Spotify image CDN.
+///
+/// `get_or_fetch_with_image` trusts its cache before it checks a host, since the
+/// covers it is handed come from Spotify metadata.  A caller passing a URL it was
+/// given from outside checks it here first, so a foreign URL can neither start a
+/// download nor be answered from a cache entry that happens to share its name.
+pub fn check_cover_url(url: &str) -> Result<(), ArtworkError> {
+    let parsed = Url::parse(url).map_err(|_| ArtworkError::InvalidUrl)?;
+    if parsed.scheme() != "https" {
+        return Err(ArtworkError::UnsupportedUrl);
+    }
+    let host = parsed.host_str().ok_or(ArtworkError::InvalidUrl)?;
+    if !(host.ends_with(".scdn.co") || host.ends_with(".spotifycdn.com")) {
+        return Err(ArtworkError::UnsupportedUrl);
+    }
+    Ok(())
 }
 
 fn validate_dimensions(width: usize, height: usize) -> Result<(), ArtworkError> {
@@ -426,11 +439,7 @@ fn read_cached(path: &Path) -> Result<Vec<u8>, ArtworkError> {
 
 #[cfg(any(feature = "album_art", feature = "cover"))]
 fn download(url: &str) -> Result<Vec<u8>, ArtworkError> {
-    let parsed = Url::parse(url).map_err(|_| ArtworkError::InvalidUrl)?;
-    let host = parsed.host_str().ok_or(ArtworkError::InvalidUrl)?;
-    if !(host.ends_with(".scdn.co") || host.ends_with(".spotifycdn.com")) {
-        return Err(ArtworkError::UnsupportedUrl);
-    }
+    check_cover_url(url)?;
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(REQUEST_TIMEOUT)
@@ -563,6 +572,30 @@ mod tests {
             validate_dimensions(1, MAX_HEIGHT + 1),
             Err(ArtworkError::InvalidDimensions)
         );
+    }
+
+    #[test]
+    fn only_https_spotify_cdn_urls_pass_the_cover_check() {
+        for url in [
+            "https://i.scdn.co/image/ab67616d",
+            "https://mosaic.scdn.co/640/ab67616d",
+            "https://image-cdn-ak.spotifycdn.com/image/ab67616d",
+        ] {
+            assert_eq!(check_cover_url(url), Ok(()), "{url}");
+        }
+        for url in [
+            "http://i.scdn.co/image/ab67616d",
+            "https://scdn.co.evil.example/image/ab67616d",
+            "https://example.com/i.scdn.co/ab67616d",
+            "file:///etc/passwd",
+        ] {
+            assert_eq!(
+                check_cover_url(url),
+                Err(ArtworkError::UnsupportedUrl),
+                "{url}"
+            );
+        }
+        assert_eq!(check_cover_url("no url"), Err(ArtworkError::InvalidUrl));
     }
 
     #[test]

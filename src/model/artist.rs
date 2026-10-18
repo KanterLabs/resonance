@@ -19,6 +19,10 @@ pub struct Artist {
     pub url: Option<String>,
     pub tracks: Option<Vec<Track>>,
     pub is_followed: bool,
+    /// The largest portrait Spotify lists. Only full artist objects carry images, and
+    /// caches written before this field existed load without one.
+    #[serde(default)]
+    pub cover_url: Option<String>,
 }
 
 impl Artist {
@@ -29,6 +33,7 @@ impl Artist {
             url: None,
             tracks: None,
             is_followed: false,
+            cover_url: None,
         }
     }
 
@@ -49,6 +54,7 @@ impl From<&SimplifiedArtist> for Artist {
             url: sa.id.as_ref().map(|id| id.url()),
             tracks: None,
             is_followed: false,
+            cover_url: None,
         }
     }
 }
@@ -61,6 +67,7 @@ impl From<&FullArtist> for Artist {
             url: Some(fa.id.url()),
             tracks: None,
             is_followed: false,
+            cover_url: fa.images.first().map(|image| image.url.clone()),
         }
     }
 }

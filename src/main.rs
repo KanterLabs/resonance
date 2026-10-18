@@ -23,6 +23,7 @@ mod engine;
 mod events;
 mod ext_traits;
 mod library;
+mod listening_diary;
 mod model;
 mod panic;
 mod prototype;
