@@ -1,5 +1,5 @@
 import type { StyledText } from "@opentui/core";
-import { PixelCanvas } from "../screens/now-playing/pixels.js";
+import { PixelCanvas, pixelGrid } from "../screens/now-playing/pixels.js";
 import type { RpcApi } from "./contracts.js";
 import { THUMBNAIL } from "./surface.js";
 
@@ -18,9 +18,10 @@ async function limited<T>(work: () => Promise<T>): Promise<T> {
   finally { loading--; waiting.shift()?.(); }
 }
 
-/** Fetch a Spotify CDN cover at thumbnail size and draw it as half-block lines. */
+/** Fetch a Spotify CDN cover at thumbnail size, with a pixel for every sub-pixel the terminal can draw. */
 export async function coverThumbnail(api: RpcApi, url: string): Promise<StyledText[] | null> {
-  const result = await limited(() => api.call<{ available?: boolean; width?: number; height?: number; pixels?: string[] }>("artwork.cover", { url, width: THUMBNAIL.width, height: THUMBNAIL.height }));
+  const [across, down] = pixelGrid();
+  const result = await limited(() => api.call<{ available?: boolean; width?: number; height?: number; pixels?: string[] }>("artwork.cover", { url, width: THUMBNAIL.width * across, height: THUMBNAIL.height * down / 2 }));
   if (!result.available || !Array.isArray(result.pixels) || typeof result.width !== "number" || typeof result.height !== "number") return null;
   if (result.pixels.length !== result.width * result.height * 2 || result.pixels.some(pixel => !/^#[0-9a-f]{6}$/i.test(pixel))) return null;
   const canvas = new PixelCanvas(THUMBNAIL.width, THUMBNAIL.height * 2, "#000000");

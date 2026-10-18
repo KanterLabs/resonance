@@ -98,6 +98,12 @@ player). Each part shows something real:
   songs play (`song.map`). Stretches not yet heard draw as a flat baseline.
 - On wide terminals the queue appears as a crate of records, each spine in its cover's colour.
 
+The deck, the VU meter and the search thumbnails draw finer where the terminal draws block mosaics
+itself: octants (2×4 pixels a cell) in VTE 0.78+ terminals such as Ptyxis and GNOME Terminal,
+and in Ghostty; sextants (2×3) in kitty and WezTerm. Other terminals keep half blocks (1×2). Set
+`RESONANCE_PIXELS` to `half`, `quadrant`, `sextant` or `octant` to choose one; use `half` if
+the deck shows boxes or gaps.
+
 The deck subscribes to the engine's audio feed (`audio.subscribe`) only while it is showing.
 Search results show a small cover beside two lines of text. On wide terminals the footer maps
 the session's measured energy, picks out the playing song and says whether the next one lifts,

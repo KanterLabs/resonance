@@ -1,12 +1,13 @@
 import type { StyledText } from "@opentui/core";
 import type { ThemeName } from "../../theme.js";
 import { blendHex } from "./motion-colors.js";
-import { PixelCanvas } from "./pixels.js";
+import { mix, PixelCanvas, type PixelMode } from "./pixels.js";
 
 /**
  * A top-down record player in the manner of a Braun PS 500: white plinth,
- * aluminium platter, black disc and one orange control. Every terminal cell
- * is an upper-half block, so each cell carries two square-ish pixels.
+ * aluminium platter, black disc and one orange control. It is laid out in
+ * square-ish pixels two to a cell, and sampled finer where the terminal draws
+ * block mosaics.
  */
 export interface TurntableCover { width: number; height: number; pixels: readonly string[] }
 export interface TurntableFrame {
@@ -30,6 +31,8 @@ export interface TurntableFrame {
   lift?: number;
   /** 0 with the record on the platter, 1 with it slid fully off to the left. */
   slide?: number;
+  /** Mosaic to draw with; the terminal's best by default. */
+  mode?: PixelMode;
 }
 
 export const TURNTABLE_MIN_ROWS = 12;
@@ -54,7 +57,9 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
   const rows = Math.max(TURNTABLE_MIN_ROWS, Math.min(TURNTABLE_MAX_ROWS, Math.round(frame.rows)));
   const width = turntableWidth(rows), height = rows * 2;
   const deck = DECKS[frame.theme];
-  const canvas = new PixelCanvas(width, height, frame.background);
+  const canvas = new PixelCanvas(width, height, frame.background, frame.mode);
+  // Fine canvases get hairline details; half blocks keep whole pixels.
+  const fine = canvas.fine < 1;
 
   const plinthHeight = height - 1, plinthWidth = width - 1, k = plinthHeight / 38;
   canvas.rect(1, plinthHeight, plinthWidth, 1, deck.shadow);
@@ -67,16 +72,19 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
     const dots = 32, ring = radius + 0.9 * k;
     for (let i = 0; i < dots; i++) {
       const angle = (i + frame.strobe) / dots * Math.PI * 2;
-      canvas.put(cx + ring * Math.cos(angle), cy + ring * Math.sin(angle), STROBE[frame.theme]);
+      canvas.put(cx + ring * Math.cos(angle), cy + ring * Math.sin(angle), STROBE[frame.theme], fine ? 0.6 : 1);
     }
   }
   const slide = Math.max(0, Math.min(1, frame.slide ?? 0));
-  if (slide > 0) canvas.disc(cx, cy, radius - 0.5, r => r < 0.8 ? "#d8d8dc" : MAT);
+  const spindle = fine ? 0.55 : 0.8;
+  if (slide > 0) canvas.disc(cx, cy, radius - 0.5, r => r < spindle ? "#d8d8dc" : MAT);
   // The record leaves to the left, clear of the arm on the right.
   const rx = cx - slide * (cx + radius + 2);
   const cos = Math.cos(frame.rotation), sin = Math.sin(frame.rotation);
+  // Fine canvases show the quiet bands between tracks instead of a groove texture, which would shimmer.
+  const gaps = [0.5, 0.68, 0.84].map(at => label + 0.9 + (radius - label - 1.9) * at);
   canvas.disc(rx, cy, radius, (r, angle, dx, dy) => {
-    if (r < 0.8) return "#d8d8dc";
+    if (r < spindle) return "#d8d8dc";
     if (r < label) {
       // Rotate the sample point, not the disc, so the label turns cleanly.
       const u = 0.5 + (dx * cos + dy * sin) / (2 * label), v = 0.5 + (dy * cos - dx * sin) / (2 * label);
@@ -88,10 +96,12 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
       }
       return Math.hypot(u - 0.78, v - 0.5) < 0.12 ? TURNTABLE_ORANGE : deck.label;
     }
-    if (r < label + 0.9) return blendHex(VINYL, "#000000", 0.3);
-    let color = blendHex(VINYL, Math.floor(r * 1.3) % 2 ? "#ffffff" : "#000000", 0.035);
-    color = blendHex(color, SHEEN, Math.pow(Math.max(0, Math.cos(2 * (angle - 0.8))), 8) * 0.5 * (r / radius));
-    return r > radius - 1 ? blendHex(color, "#ffffff", 0.08) : color;
+    if (r < label + 0.9) return mix(VINYL, "#000000", 0.3);
+    let color = fine
+      ? mix(VINYL, "#ffffff", gaps.some(gap => Math.abs(r - gap) < 0.22) ? 0.07 : 0)
+      : mix(VINYL, Math.floor(r * 1.3) % 2 ? "#ffffff" : "#000000", 0.035);
+    color = mix(color, SHEEN, Math.pow(Math.max(0, Math.cos(2 * (angle - 0.8))), 8) * 0.5 * (r / radius));
+    return r > radius - 1 ? mix(color, "#ffffff", 0.08) : color;
   });
 
   const pivotX = 38 * k, pivotY = 6 * k, armLength = 22 * k;
@@ -117,11 +127,23 @@ export function turntableLines(frame: TurntableFrame): StyledText[] {
     tipX = pivotX + armLength * Math.cos(angle); tipY = pivotY + armLength * Math.sin(angle);
   }
   const backX = pivotX + (pivotX - tipX) * 0.22, backY = pivotY + (pivotY - tipY) * 0.22;
-  canvas.line(pivotX, pivotY, backX, backY, deck.arm);
-  canvas.rect(backX - 1, backY - 1, 3, 3, deck.weight);
-  canvas.disc(pivotX, pivotY, 2.6 * Math.max(1, k * 0.8), r => r < 1.3 ? deck.pivotTop : deck.pivot);
-  canvas.line(pivotX, pivotY, tipX, tipY, deck.arm);
-  canvas.rect(tipX - 1, tipY - 1, 2, 3, deck.head);
+  const reach = Math.hypot(tipX - pivotX, tipY - pivotY) || 1, ax = (tipX - pivotX) / reach, ay = (tipY - pivotY) / reach;
+  if (fine) {
+    // Counterweight and headshell turn with the arm.
+    canvas.line(pivotX, pivotY, backX, backY, deck.arm, 0.8);
+    canvas.line(backX - ax * 0.9, backY - ay * 0.9, backX + ax * 0.6, backY + ay * 0.6, deck.weight, 2.6);
+    canvas.disc(pivotX, pivotY, 2.6 * Math.max(1, k * 0.8), r => r < 1.1 ? deck.pivotTop : r > 2.2 * Math.max(1, k * 0.8) ? mix(deck.pivot, "#000000", 0.25) : deck.pivot);
+    canvas.line(pivotX, pivotY, tipX - ax * 1.2, tipY - ay * 1.2, deck.arm, 0.8);
+    canvas.line(tipX - ax * 1.4, tipY - ay * 1.4, tipX + ax * 0.9, tipY + ay * 0.9, deck.head, 1.8);
+    // The finger lift, a small tab off the headshell.
+    canvas.line(tipX - ax * 0.6, tipY - ay * 0.6, tipX - ax * 0.6 - ay * 1.6, tipY - ay * 0.6 + ax * 1.6, deck.head, 0.5);
+  } else {
+    canvas.line(pivotX, pivotY, backX, backY, deck.arm);
+    canvas.rect(backX - 1, backY - 1, 3, 3, deck.weight);
+    canvas.disc(pivotX, pivotY, 2.6 * Math.max(1, k * 0.8), r => r < 1.3 ? deck.pivotTop : deck.pivot);
+    canvas.line(pivotX, pivotY, tipX, tipY, deck.arm);
+    canvas.rect(tipX - 1, tipY - 1, 2, 3, deck.head);
+  }
   canvas.rect(37 * k, 31 * k, 3 * k, 3 * k, frame.playing ? TURNTABLE_ORANGE : blendHex(deck.plinth, TURNTABLE_ORANGE, 0.45));
   return canvas.lines();
 }

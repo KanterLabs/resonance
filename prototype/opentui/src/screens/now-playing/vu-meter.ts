@@ -1,7 +1,7 @@
 import type { StyledText } from "@opentui/core";
 import type { ThemeName } from "../../theme.js";
 import { blendHex } from "./motion-colors.js";
-import { PixelCanvas } from "./pixels.js";
+import { PixelCanvas, type PixelMode } from "./pixels.js";
 import { TURNTABLE_ORANGE } from "./turntable.js";
 
 const FACES = {
@@ -40,10 +40,11 @@ export class Needle {
 }
 
 /** A Braun-style meter face `columns` cells wide and `rows` cells tall. */
-export function vuMeterLines(value: number, columns: number, rows: number, theme: ThemeName, background: string): StyledText[] {
+export function vuMeterLines(value: number, columns: number, rows: number, theme: ThemeName, background: string, mode?: PixelMode): StyledText[] {
   const width = Math.max(8, columns), height = Math.max(4, rows * 2);
   const colors = FACES[theme];
-  const canvas = new PixelCanvas(width, height, background);
+  const canvas = new PixelCanvas(width, height, background, mode);
+  const fine = canvas.fine < 1;
   canvas.rect(0, 0, width, height, colors.rim);
   canvas.rect(1, 1, width - 2, height - 2, colors.face);
   // The pivot sits just below the face, and the scale is a wide ellipse, so a
@@ -53,19 +54,21 @@ export function vuMeterLines(value: number, columns: number, rows: number, theme
     const angle = -SWEEP + 2 * SWEEP * t;
     return [px + (rx - inset) * Math.sin(angle), py - (ry - inset * ry / rx) * Math.cos(angle)];
   };
-  const steps = Math.max(9, Math.round(width * 0.8));
+  // A fine canvas draws the scale as a continuous arc with hairline ticks.
+  const steps = Math.max(9, Math.round(width * (fine ? 2.4 : 0.8))), major = Math.max(1, Math.round(steps / 10));
   for (let i = 0; i <= steps; i++) {
     const t = i / steps, color = t >= RED_ZONE ? TURNTABLE_ORANGE : colors.tick;
-    canvas.put(...at(t), color);
-    if (i % Math.max(1, Math.round(steps / 10)) === 0) canvas.put(...at(t, 1.2), color);
+    canvas.put(...at(t), color, fine ? canvas.fine : 1);
+    if (i % major === 0) {
+      if (fine) canvas.line(...at(t, 0.4), ...at(t, 1.4), color, canvas.fine);
+      else canvas.put(...at(t, 1.2), color);
+    }
   }
   const [tipX, tipY] = at(Math.max(-0.04, Math.min(1.08, value)), -0.4);
-  const length = Math.ceil(Math.hypot(tipX - px, tipY - py) * 2);
-  for (let i = 0; i <= length; i++) {
-    const x = px + (tipX - px) * i / length, y = py + (tipY - py) * i / length;
-    // Keep the needle on the glass, inside the rim.
-    if (x >= 1 && y >= 1 && x <= width - 2 && y <= height - 2) canvas.put(x, y, colors.needle);
-  }
+  // Keep the needle on the glass, inside the rim.
+  canvas.clip = { x: 1, y: 1, width: width - 2, height: height - 2 };
+  canvas.line(px, py, tipX, tipY, colors.needle, fine ? canvas.fine : 1);
+  canvas.clip = null;
   canvas.rect(px - 1, height - 2, 3, 1, blendHex(colors.face, colors.pivot, 0.8));
   return canvas.lines();
 }

@@ -65,7 +65,9 @@ previews do not save them. Now Playing opens on a Braun-style turntable (`turnta
 cover is printed on the label and turns with the playhead, the tonearm's position on the record
 is the progress, and a short spec sheet with a VU meter and a loudness-shaped progress bar lists
 the track, volume, repeat/shuffle and the next song. `deck-view.ts` runs the view and its frame
-clock; `vu-meter.ts`, `waveform-bar.ts` and `crate.ts` draw its parts on the shared `pixels.ts`.
+clock; `vu-meter.ts`, `waveform-bar.ts` and `crate.ts` draw its parts on the shared `pixels.ts`,
+which samples each drawing at up to 2×4 pixels a cell in terminals that draw octants (`RESONANCE_PIXELS` overrides the guess;
+`bunfig.toml` pins tests to half blocks).
 **v** switches to the classic player and the choice is saved beside reduced motion. Windows that
 can't fit the deck use the classic player, which groups artwork, metadata and controls in a centered player
 card, with an Up Next card on wide terminals. Real cover images use Rust's existing disk cache;

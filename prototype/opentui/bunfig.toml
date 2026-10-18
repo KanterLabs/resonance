@@ -1,0 +1,3 @@
+[test]
+# Pin the pixel mosaic so tests draw the same in any terminal.
+preload = ["./test/helpers/setup.ts"]

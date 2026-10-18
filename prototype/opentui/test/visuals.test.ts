@@ -3,6 +3,7 @@ import { coverColor, crateLines } from "../src/screens/now-playing/crate.js";
 import { calendarGrid, formatMinutes, intensityScale, monthName, type Calendar } from "../src/screens/diary/model.js";
 import { deckLayout } from "../src/screens/now-playing/deck-view.js";
 import { turntableLines, type TurntableFrame } from "../src/screens/now-playing/turntable.js";
+import { detectPixelMode, PixelCanvas } from "../src/screens/now-playing/pixels.js";
 import { meterTarget, Needle, vuMeterLines } from "../src/screens/now-playing/vu-meter.js";
 import { waveformBar, waveformColumns } from "../src/screens/now-playing/waveform-bar.js";
 import { parseAudioFrame, parseStatus } from "../src/status.js";
@@ -21,6 +22,54 @@ test("the turntable strobe, arm lift and record slide each change the drawing", 
   // Fully lifted, the arm rests where a parked arm does.
   expect(signature(turntableLines({ ...base, lift: 1, strobe: null }))).toBe(signature(turntableLines({ ...base, progress: null, strobe: null })));
   expect(signature(turntableLines({ ...base, slide: 0.5 }))).not.toBe(drawn);
+});
+
+test("the pixel mode follows what the terminal draws itself", () => {
+  expect(detectPixelMode({})).toBe("half");
+  expect(detectPixelMode({ VTE_VERSION: "8204" })).toBe("octant");
+  expect(detectPixelMode({ VTE_VERSION: "7600" })).toBe("sextant");
+  expect(detectPixelMode({ VTE_VERSION: "7000" })).toBe("half");
+  expect(detectPixelMode({ TERM_PROGRAM: "ghostty" })).toBe("octant");
+  expect(detectPixelMode({ KITTY_WINDOW_ID: "1" })).toBe("sextant");
+  expect(detectPixelMode({ VTE_VERSION: "8204", RESONANCE_PIXELS: "Quadrant" })).toBe("quadrant");
+  expect(detectPixelMode({ VTE_VERSION: "8204", RESONANCE_PIXELS: "nonsense" })).toBe("octant");
+});
+
+test("fine canvases pick a mosaic glyph and two colours per cell", () => {
+  const glyphs = (mode: "quadrant" | "sextant" | "octant", draw: (canvas: PixelCanvas) => void) => {
+    const canvas = new PixelCanvas(2, 2, "#000000", mode); draw(canvas);
+    const [line] = canvas.lines();
+    return { text: text(line!), colors: line!.chunks.map(chunk => [chunk.fg!.toInts().slice(0, 3).join(), chunk.bg!.toInts().slice(0, 3).join()]) };
+  };
+  // Half a base pixel is one sub-pixel across: the left half of the first cell.
+  expect(glyphs("octant", canvas => canvas.rect(0, 0, 0.5, 2, "#ffffff")).text).toBe("▌ ");
+  expect(glyphs("quadrant", canvas => canvas.rect(0, 0, 0.5, 2, "#ffffff")).text).toBe("▌ ");
+  // The top left sub-pixel alone has an octant of its own.
+  const dot = glyphs("octant", canvas => canvas.put(-0.25, -0.25, "#ff0000", 0.5));
+  expect(dot.text).toBe("\u{1cea8} ");
+  expect(dot.colors[0]).toEqual(["255,0,0", "0,0,0"]);
+  // A pattern with no older name comes from the octant block.
+  expect(glyphs("octant", canvas => { canvas.put(-0.25, -0.25, "#ffffff", 0.5); canvas.put(0.25, 0.25, "#ffffff", 0.5); }).text).toBe(`${String.fromCodePoint(0x1cd04)} `);
+  expect(glyphs("sextant", canvas => canvas.rect(0, 0, 1, 0.6, "#ffffff")).text).toBe(`${String.fromCodePoint(0x1fb02)} `);
+  // Three flat colours settle into the two that describe the cell best, and keep their exact values.
+  const three = glyphs("octant", canvas => { canvas.rect(0, 0, 0.5, 2, "#ffffff"); canvas.rect(0.5, 0, 0.5, 1, "#f0f0f0"); });
+  expect([...three.text][0]).toBe("▛");
+  expect(three.colors[0]).toEqual(["255,255,255", "0,0,0"]);
+  // A lone dot on the edge of a flat area does not tint the area.
+  const edge = glyphs("octant", canvas => { canvas.rect(-0.5, -0.5, 1, 1.5, "#ffffff"); canvas.put(-0.25, 0.75, "#888888", 0.5); });
+  expect(edge.colors[0]!).toContain("255,255,255");
+});
+
+test("the fine turntable keeps its size and gains detail", () => {
+  const base: TurntableFrame = { rows: 19, theme: "dark", background: "#080a10", progress: 0.4, rotation: 0, playing: true, strobe: 0 };
+  const half = turntableLines(base), fine = turntableLines({ ...base, mode: "octant" });
+  expect(fine).toHaveLength(half.length);
+  for (const line of fine) expect([...text(line)]).toHaveLength([...text(half[0]!)].length);
+  expect(fine.some(line => [...text(line)].some(glyph => glyph.codePointAt(0)! >= 0x1cd00))).toBe(true);
+  expect(signature(turntableLines({ ...base, mode: "octant", strobe: 0.5 }))).not.toBe(signature(fine));
+  const meter = vuMeterLines(0.5, 32, 4, "dark", "#000000", "octant");
+  for (const line of meter) expect([...text(line)]).toHaveLength(32);
+  expect(signature(vuMeterLines(0.9, 32, 4, "dark", "#000000", "octant"))).not.toBe(signature(meter));
 });
 
 test("the VU needle rises fast, overshoots a little and settles", () => {
