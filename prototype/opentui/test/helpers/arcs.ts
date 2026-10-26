@@ -21,6 +21,7 @@ export async function workspace(options: WorkspaceOptions = {}) {
   const setup = await createTestRenderer(options.size ?? { width: 110, height: 34 });
   const calls: { method: string; params: Params }[] = [];
   let current = draft();
+  const bans = new Set<string>();
   const known = new Map<string, ArcSlot>(Array.from({ length: 10 }, (_, i) => [slot(i).uri, slot(i)]));
   /** The next draft from these slots, numbered in order, keeping the recipe and playlist. */
   const next = (slots: ArcSlot[], recipe: Recipe = current.recipe) => {
@@ -36,13 +37,24 @@ export async function workspace(options: WorkspaceOptions = {}) {
         const recipe = params.recipe as Recipe;
         return next([0, 1, 2, 3].map(i => slot(i)), { ...recipe, seeds: recipe.seeds.length ? recipe.seeds : ["spotify:track:t0"] }) as T;
       }
-      case "builder.restore": return next((params.uris as string[]).map(uri => known.get(uri)!).filter(Boolean), params.recipe as Recipe) as T;
+      case "builder.restore": {
+        const recipe = params.recipe as Recipe;
+        const kept = new Set(recipe.pins.map(pin => pin.uri));
+        return next((params.uris as string[]).map(uri => known.get(uri)!).filter(Boolean).map(s => ({ ...s, pinned: kept.has(s.uri) })), recipe) as T;
+      }
       case "builder.reroll": return { slot: params.slot, alternatives: [slot(9, { slot: params.slot as number })] } as T;
       case "builder.choose": return next(current.slots.map((s, i) => i === params.slot ? slot(9, { pinned: true }) : s)) as T;
-      case "builder.pin": return next(current.slots.map((s, i) => i === params.slot ? { ...s, pinned: !!params.pinned } : s)) as T;
+      case "builder.pin": {
+        const slots = current.slots.map((s, i) => i === params.slot ? { ...s, pinned: !!params.pinned } : s);
+        return next(slots, { ...current.recipe, pins: slots.filter(s => s.pinned).map(s => ({ uri: s.uri, slot: s.slot })) }) as T;
+      }
       case "builder.ban": {
         const banned = current.slots[params.slot as number]!;
-        return next(current.slots.filter((_, i) => i !== params.slot), { ...current.recipe, seeds: current.recipe.seeds.filter(seed => seed !== banned.uri) }) as T;
+        // The arc refills the spot with a track it has not used yet, like the engine does.
+        const fresh = [...known.values()].find(s => s.slot >= 4 && !current.slots.some(used => used.uri === s.uri) && !bans.has(s.uri));
+        bans.add(banned.uri);
+        const slots = current.slots.flatMap((s, i) => i !== params.slot ? [s] : fresh ? [{ ...fresh, seed: false }] : []);
+        return next(slots, { ...current.recipe, seeds: current.recipe.seeds.filter(seed => seed !== banned.uri) }) as T;
       }
       case "builder.move": {
         const slots = [...current.slots];

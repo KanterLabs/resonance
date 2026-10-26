@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what was playing; **m** switches length between tracks and minutes; **f** lists the starting
   songs so any one can be removed; **S** saves as a new playlist. In curve editing, **1**–**9**
   and **0** set a point's level, **Shift+←/→** slides it, and **n**/**d** add and delete points.
+- Arc Studio **w** picks an arc one song at a time: each track plays as a 20-second audition,
+  **→** keeps it and moves on, **←** skips it and the arc refills that spot from the curve. The
+  playlist grows as you pick, and what was playing comes back when you finish or press Esc.
 - The Arc Studio chart draws each track where its energy landed, marks tracks far from the curve,
   and points at the selected track. The heading shows whether the arc has unsaved changes.
 - `resonance arcs-debug` prints an arc built from cached music without logging in.

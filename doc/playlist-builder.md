@@ -80,6 +80,7 @@ is described in [Arc Studio UX pass](arc-studio-ux.md).
 | `g` | Remix: same shape and songs, different picks (kept tracks stay) |
 | `r` | Swap the selected track: pick a replacement with `↑↓ Enter` (it is kept in place), `a` auditions one, `Esc` keeps the current track |
 | `k` | Keep the selected track in place |
+| `w` | Pick the arc one song at a time: each track plays in turn; `→` (or `k`, `Enter`) keeps it, `←` (or `x`) skips it and the arc refills that spot with the next best fit. The list grows as you pick. `a` hears it again, `z` undoes, `s` saves, `Esc` returns to the arc |
 | `x` | Remove the selected track; it will not come back in this arc |
 | `Shift+↑` `Shift+↓`, `<` `>` | Move the selected track and keep it where it lands |
 | `z` / `Z` | Undo / redo the last change, restoring exactly the tracks that were there |

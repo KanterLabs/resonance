@@ -5,6 +5,7 @@ import { paletteForTheme, type ThemePalette } from "../../theme.js";
 import type { ParsedStatus } from "../../status.js";
 import { ArcsController } from "./controller.js";
 import { curveCells, digitLevel, insertPoint, removePoint, setPoint, slidePoint, slotMarker, type Tone } from "./curve.js";
+import { Swiper } from "./swipe.js";
 import { COMPACT_LEGENDS, LEGENDS, adjustLength, adjustPoint, lengthLabel, markerRow, mixLabel, nextPreset, presetLabel, seedsLabel, slotExplanation, slotRow, summary, toggleLength, whyLine, type Legend, type SeedRow } from "./model.js";
 
 const GUTTER = 7;
@@ -53,10 +54,12 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
   surface.body.add(panel, 0);
 
   const controller = new ArcsController(ctx.api, () => render());
+  const swiper = new Swiper(controller);
   controller.setCurrent(seedFromStatus(ctx.status()));
   const unsubscribe = ctx.onStatus(status => { controller.setCurrent(seedFromStatus(status)); render(); });
 
   function legend(): Legend {
+    if (swiper.active) return "swipe";
     if (controller.mode === "alternatives") return "swap";
     if (controller.mode === "search") return "seed";
     if (controller.mode === "seeds") return "seeds";
@@ -65,6 +68,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
   }
 
   function rows(): Row[] {
+    if (swiper.active) return swiper.rows();
     if (controller.mode === "alternatives") return controller.alternatives.map((slot, i) => ({ ...slotRow(slot, `alt-${i}`), title: `↻ ${slot.title}` }));
     if (controller.mode === "search") return controller.results.map(row => ({ ...row, id: `seed-${row.id}`, title: `+ ${row.title}` }));
     if (controller.mode === "seeds") return controller.seeds().map(seed => ({ id: `start-${seed.uri}`, kind: "track", title: `✦ ${seed.title}`, subtitle: seed.artists.join(", "), uri: seed.uri }));
@@ -81,6 +85,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
   /** The arc slot the chart should point at: the selected track, or the one being swapped. */
   function chartSelection(): number {
     if (controller.mode === "alternatives") return controller.alternativeSlot;
+    if (swiper.active) return swiper.candidate?.slot ?? -1;
     return controller.mode === "draft" ? selectedSlot()?.slot ?? -1 : -1;
   }
 
@@ -114,7 +119,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
   }
 
   function heading(): string {
-    const base = controller.mode === "alternatives" ? `Arc Studio / swap track ${controller.alternativeSlot + 1}`
+    const base = swiper.active ? swiper.heading() : controller.mode === "alternatives" ? `Arc Studio / swap track ${controller.alternativeSlot + 1}`
       : controller.mode === "search" ? "Arc Studio / add a starting song"
       : controller.mode === "seeds" ? "Arc Studio / starting songs" : "Arc Studio";
     const waiting = controller.pendingLabel;
@@ -176,14 +181,15 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
     if (key !== listKey) {
       listKey = key;
       const focus = controller.focusSlot;
-      const prefer = controller.mode === "draft" ? (focus !== null ? `slot-${focus}` : returnTo) : undefined;
+      const candidate = swiper.active ? swiper.candidate : undefined;
+      const prefer = candidate ? `slot-${candidate.slot}` : controller.mode === "draft" ? (focus !== null ? `slot-${focus}` : returnTo) : undefined;
       surface.setRows(next, prefer, activate);
       if (controller.mode === "draft") { returnTo = undefined; controller.focusSlot = null; }
     }
     surface.heading.content = heading();
 
     const why = selectedSlot();
-    const explain = why ? (detail ? slotExplanation(why) : whyLine(why)) : "";
+    const explain = swiper.active ? swiper.message() : why ? (detail ? slotExplanation(why) : whyLine(why)) : "";
     if (roomForStatus) {
       clearTimeout(holdTimer);
       surface.setMessage(explain);
@@ -263,6 +269,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
     const sequence = key.sequence ?? "";
     if (editing) return editKey(key, name);
     if (key.meta) return false;
+    if (swiper.active && swiper.key(name, sequence)) { render(); return true; }
     if (controller.audition) {
       // Esc ends an audition before it leaves anything; changing the arc ends it too.
       if (name === "escape") { void controller.stopListening(); return true; }
@@ -292,6 +299,7 @@ export const createArcsScreen: ScreenFactory = (ctx, params = {}) => {
       case "u": void controller.build(); return true;
       case "c": void controller.useCurrent(); return true;
       case "f": controller.showSeeds(); return true;
+      case "w": if (swiper.start()) render(); else surface.setMessage("Build an arc first, then pick it one song at a time", true); return true;
       case "z": void controller.undo(); return true;
       case "/": searchPrompt(); return true;
       case "backspace": case "delete": controller.removeSeed(); return true;

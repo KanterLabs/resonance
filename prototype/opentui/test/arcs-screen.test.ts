@@ -100,7 +100,7 @@ test("swap, keep, remove and save work from the keyboard", async () => {
     expect(await w.frame()).toContain("Save as a private playlist named");
     w.keys.pressEnter(); await tick();
     expect(w.last("builder.save")?.params).toEqual({ name: "Track 0 arc", overwrite: false });
-    expect(await w.frame()).toContain("Saved 3 tracks to Track 0 arc");
+    expect(await w.frame()).toContain("Saved 4 tracks to Track 0 arc");
   } finally { w.cleanup(); }
 });
 
@@ -128,7 +128,7 @@ test("the studio fits 80x24 with its legend visible", async () => {
   try {
     const frame = await w.frame();
     expect(frame.split("\n").length).toBeLessThanOrEqual(25);
-    expect(frame).toContain("↑↓ ⏎ play  r swap  k keep  x remove  z undo  s save  ? keys");
+    expect(frame).toContain("↑↓ ⏎ play  w one at a time  r swap  k keep  x remove  z undo  ? keys");
     expect(frame).toContain("Shape  ◀ Rise & Fall ▶  18 tracks  mix familiar");
     expect(frame).not.toContain("...");
     expect(frame).toContain("Track 0");

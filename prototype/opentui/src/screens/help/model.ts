@@ -14,6 +14,7 @@ export const ARC_STUDIO_KEYS = [
   ["arc-shape", "Arc Studio · shape", "←→ shape · e edit curve · −/+ length · m tracks or minutes · [/] familiar or new · g remix · u use new measurements"],
   ["arc-seeds", "Arc Studio · starting songs", "/ add a song · f list starting songs (x removes one) · c start over from the playing song · ⌫ drop the last"],
   ["arc-curve", "Arc Studio · editing the curve", "←→ choose point · ↑↓ raise/lower · 1–9 sets 10–90%, 0 sets 100% · ⇧←→ slide · n add point · d delete point · ⏎/Esc done"],
+  ["arc-swipe", "Arc Studio · one at a time", "w hears each track in turn · → or k keep it · ← or x skip it, and the arc refills the spot · a hear again · z undo · Esc back"],
   ["arc-swap", "Arc Studio · swapping a track", "↑↓ pick · a audition · ⏎ use it, kept in place · Esc keep the current track"],
 ] as const;
 

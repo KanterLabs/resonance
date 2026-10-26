@@ -215,23 +215,25 @@ export function slotExplanation(slot: ArcSlot): string {
 export function mixLabel(discovery: number): string {
   return `familiar ${dial(discovery, 8)} new`;
 }
-export type Legend = "arc" | "edit" | "swap" | "seed" | "seeds" | "empty";
+export type Legend = "arc" | "edit" | "swap" | "seed" | "seeds" | "swipe" | "empty";
 /** Narrow-terminal legends: the same keys in fewer words, so nothing is cut off at 80 columns. */
 export const COMPACT_LEGENDS: Record<Legend, string> = {
-  arc: "↑↓ ⏎ play  r swap  k keep  x remove  z undo  s save  ? keys",
+  arc: "↑↓ ⏎ play  w one at a time  r swap  k keep  x remove  z undo  ? keys",
   edit: "Curve: ←→ point  ↑↓/0–9 level  ⇧←→ slide  n add  d del  ⏎ done",
   swap: "Swap: ↑↓ pick  ⏎ use it  a listen  Esc keep current",
   seed: "Add song: ↑↓ pick  ⏎ add  Esc back",
   seeds: "Starting songs: ↑↓  x remove  / add  c add playing  Esc back",
+  swipe: "One at a time: → keep  ← skip  a hear  z undo  Esc back",
   empty: "Play a song, then press c  ·  / choose a starting song",
 };
 /** One line of the keys used most in each mode; Help lists every key. */
 export const LEGENDS: Record<Legend, string> = {
-  arc: "↑↓ pick  ⏎ play from here  r swap  k keep  x remove  z undo  s save  a listen  ? all keys",
+  arc: "↑↓ pick  ⏎ play from here  w one at a time  r swap  k keep  x remove  z undo  s save  ? all keys",
   edit: "Editing curve: ←→ point  ↑↓ or 0–9 level  ⇧←→ slide  n add  d delete  ⏎ done",
   swap: "Swap: ↑↓ pick a replacement  ⏎ use it  a listen  Esc keep the current track",
   seed: "Add a starting song: ↑↓ pick  ⏎ add  Esc back to the arc",
   seeds: "Starting songs: ↑↓ pick  x remove  / add a song  c add the playing song  Esc back",
+  swipe: "One at a time: → keep it  ← skip it  a hear it again  z undo  s save  Esc back to the arc",
   empty: "Play a song, then press c to build an arc from it  ·  / choose a starting song",
 };
 export function summary(draft: ArcDraft): string {
