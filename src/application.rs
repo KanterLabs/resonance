@@ -195,7 +195,7 @@ impl Application {
             configuration.clone(),
             library.clone(),
         ));
-        crate::builder::fingerprint::start(spotify.clone(), queue.clone());
+        crate::builder::sampler::start(spotify.clone(), queue.clone());
         crate::builder::preview::queue::start(queue.clone(), library.clone());
 
         #[cfg(feature = "mpris")]
@@ -333,6 +333,7 @@ impl Application {
 
         // cursive event loop
         while self.cursive.is_running() {
+            crate::builder::audition::maintain(&self.queue);
             self.queue.observe_listening();
             let current = self.queue.get_current().map(|item| item.uri());
             if current != prewarmed {
@@ -382,8 +383,12 @@ impl Application {
                         }
 
                         if state == PlayerEvent::FinishedTrack {
-                            self.queue.next(false);
-                        } else if state == PlayerEvent::Stopped {
+                            if !crate::builder::audition::finished(&self.spotify) {
+                                self.queue.next(false);
+                            }
+                        } else if state == PlayerEvent::Stopped
+                            && !crate::builder::audition::active()
+                        {
                             // Natural radio exhaustion stays FinishedTrack;
                             // Stopped is an explicit transport or stream failure.
                             self.queue.cancel_radio();
@@ -445,7 +450,7 @@ impl Application {
         }
         self.queue.finish_listening();
         crate::recommendations::history::shared().flush();
-        crate::builder::fingerprint::flush();
+        crate::builder::sampler::flush();
         crate::builder::preview::shared().save();
         crate::song_map::flush();
         crate::listening_diary::flush();

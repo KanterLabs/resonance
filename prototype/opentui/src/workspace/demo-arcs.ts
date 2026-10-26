@@ -34,6 +34,27 @@ export class DemoArcs {
         this.recipe!.bans.push(draft.slots[slot]!.uri);
         return this.build();
       }
+      case "builder.move": {
+        const draft = this.require();
+        const from = this.slot(p), to = this.slot({ slot: p.to });
+        const slots = [...draft.slots];
+        const [moved] = slots.splice(from, 1);
+        slots.splice(to, 0, { ...moved!, pinned: true });
+        draft.slots = slots.map((slot, i) => ({ ...slot, slot: i, target: draft.targets[i] ?? slot.target }));
+        return draft;
+      }
+      case "builder.restore": {
+        this.recipe = normalizeRecipe(p.recipe);
+        const draft = this.build();
+        const order = Array.isArray(p.uris) ? p.uris.filter((uri): uri is string => typeof uri === "string") : [];
+        const byUri = new Map(draft.slots.map(slot => [slot.uri, slot]));
+        const kept = order.map(uri => byUri.get(uri)).filter((slot): slot is ArcSlot => !!slot);
+        if (kept.length) draft.slots = kept.map((slot, i) => ({ ...slot, slot: i, target: draft.targets[i] ?? slot.target }));
+        return draft;
+      }
+      case "builder.audition": fail("unavailable", "The offline demo cannot audition tracks");
+      // eslint-disable-next-line no-fallthrough
+      case "builder.audition_stop": return { stopped: false };
       case "builder.play": { const draft = this.require(); if (draft.slots[0]) this.playUri(draft.slots[0].uri); return { queued: draft.slots.length }; }
       case "builder.save": fail("unavailable", "Saving needs a Spotify account; the offline demo cannot create playlists");
       // eslint-disable-next-line no-fallthrough

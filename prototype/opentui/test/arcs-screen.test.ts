@@ -1,53 +1,7 @@
 import { expect, test } from "bun:test";
-import { createTestRenderer } from "@opentui/core/testing";
-import { mountWorkspace } from "../src/workspace/app.js";
 import { ArcsController } from "../src/screens/arcs/controller.js";
-import { normalizeRecipe, type ArcDraft, type ArcSlot, type Recipe } from "../src/screens/arcs/model.js";
-import type { Params } from "../src/workspace/contracts.js";
-import type { ParsedStatus } from "../src/status.js";
-
-const tick = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
-const slot = (i: number, extra: Partial<ArcSlot> = {}): ArcSlot => ({ slot: i, uri: `spotify:track:t${i}`, title: `Track ${i}`, artists: [`Artist ${i}`], album: null, duration_ms: 200_000, target: 0.5, energy: 0.1 * i, measure: "measured", tempo: 100 + i, score: 0.7, affinity: 0.8, curve_fit: 0.9, transition: 0.6, penalty: 0, reasons: [`reason ${i}`], pinned: false, seed: i === 0, ...extra });
-const draft = (slots: ArcSlot[] = [0, 1, 2, 3].map(i => slot(i)), extra: Partial<ArcDraft> = {}): ArcDraft => ({ recipe: { ...normalizeRecipe(undefined), seeds: ["spotify:track:t0"] }, slots, targets: [], confidence: 0.8, measured: slots.length, estimated: 0, unmeasured: 0, pool_size: 30, duration_ms: slots.length * 200_000, notes: [], playlist_id: null, ...extra });
-const status = { mode: { kind: "playing", startedAtMs: 0 }, playable: { uri: "spotify:track:t0", title: "Track 0", artists: ["Artist 0"], album: "", duration: 200_000 }, prototype: { position_ms: 0, volume_percent: 50 } } as unknown as ParsedStatus;
-
-/** The whole workspace with a scripted engine, driven by real key sequences. */
-async function workspace(options: { playing?: boolean; size?: { width: number; height: number } } = {}) {
-  const setup = await createTestRenderer(options.size ?? { width: 110, height: 34 });
-  const calls: { method: string; params: Params }[] = [];
-  let current = draft();
-  const api = { async call<T>(method: string, params: Params = {}): Promise<T> {
-    calls.push({ method, params });
-    switch (method) {
-      case "builder.state": return { recipe: normalizeRecipe(undefined), draft: null, fingerprinted: 12, current: options.playing === false ? null : { uri: "spotify:track:t0", title: "Track 0", artists: ["Artist 0"] } } as T;
-      case "builder.build": {
-        const recipe = params.recipe as Recipe;
-        current = draft(undefined, { recipe: { ...recipe, seeds: recipe.seeds.length ? recipe.seeds : ["spotify:track:t0"] } });
-        return current as T;
-      }
-      case "builder.reroll": return { slot: params.slot, alternatives: [slot(9, { slot: params.slot as number })] } as T;
-      case "builder.choose": current = draft(current.slots.map((s, i) => i === params.slot ? slot(9, { slot: i }) : s)); return current as T;
-      case "builder.pin": current = draft(current.slots.map((s, i) => i === params.slot ? { ...s, pinned: !!params.pinned } : s)); return current as T;
-      case "builder.ban": current = draft(current.slots.filter((_, i) => i !== params.slot).map((s, i) => ({ ...s, slot: i }))); return current as T;
-      case "builder.play": return { queued: 4 - Number(params.slot ?? 0) } as T;
-      case "builder.save": return { id: "p1", overwritten: false, tracks: current.slots.length } as T;
-      case "search": return { items: [{ id: "s1", kind: "track", title: "Found", subtitle: "Someone", uri: "spotify:track:found" }], offset: 0, limit: 8, total: 1, has_more: false } as T;
-      default: return {} as T;
-    }
-  } };
-  const app = mountWorkspace(setup.renderer, { api, theme: "dark", reducedMotion: true });
-  if (options.playing !== false) app.setStatus(status);
-  setup.mockInput.pressKey("0"); await tick(30);
-  const keys = setup.mockInput;
-  return {
-    app, calls, keys,
-    builds: () => calls.filter(call => call.method === "builder.build"),
-    last: (method: string) => calls.filter(call => call.method === method).at(-1),
-    async frame() { await setup.renderOnce(); return setup.captureCharFrame(); },
-    async type(text: string) { await keys.typeText(text); await tick(); },
-    cleanup() { app.dispose(); setup.renderer.destroy(); },
-  };
-}
+import type { Recipe } from "../src/screens/arcs/model.js";
+import { draft, slot, tick, workspace } from "./helpers/arcs.js";
 
 test("0 opens Arc Studio and builds from the playing song without a keypress", async () => {
   const w = await workspace();
@@ -113,12 +67,13 @@ test("e edits the curve modally and digits do not navigate away while editing", 
     await w.type("e");
     expect(await w.frame()).toContain("Editing curve");
     w.keys.pressArrow("right"); w.keys.pressArrow("up"); await tick();
+    expect(await w.frame()).toContain("point 2/8 · energy 45%");
     await w.type("3");
     expect(w.app.route).toBe("arcs");
-    expect(await w.frame()).toContain("point 2/8 · energy 45%");
+    expect(await w.frame()).toContain("point 2/8 · energy 30%");
     w.keys.pressEnter(); await tick(450);
     const recipe = w.last("builder.build")?.params.recipe as Recipe;
-    expect(recipe.curve[1]!.energy).toBeCloseTo(0.45);
+    expect(recipe.curve[1]!.energy).toBeCloseTo(0.3);
     expect(recipe.preset).toBeNull();
     expect(await w.frame()).toContain("◀ Custom ▶");
     expect(await w.frame()).not.toContain("Editing curve");
@@ -134,10 +89,11 @@ test("swap, keep, remove and save work from the keyboard", async () => {
     expect(await w.frame()).toContain("Swap: ↑↓ pick a replacement");
     w.keys.pressEnter(); await tick();
     expect(w.last("builder.choose")?.params).toEqual({ slot: 1, uri: "spotify:track:t9" });
-    expect(await w.frame()).toContain("Swapped in Track 9");
-    await w.type("k");
-    expect(w.last("builder.pin")?.params).toEqual({ slot: 1, pinned: true });
+    expect(await w.frame()).toContain("Swapped in Track 9 and kept it there");
     expect(await w.frame()).toContain("◆ Track 9");
+    await w.type("k");
+    expect(w.last("builder.pin")?.params).toEqual({ slot: 1, pinned: false });
+    expect(await w.frame()).toContain("Track 9 can move again");
     await w.type("x");
     expect(w.last("builder.ban")?.params).toEqual({ slot: 1 });
     await w.type("s");
@@ -167,13 +123,12 @@ test("/ adds a starting song, Esc cancels a swap, and Esc on the arc returns to 
   } finally { w.cleanup(); }
 });
 
-test("the studio fits 80x24 with both legend lines visible", async () => {
+test("the studio fits 80x24 with its legend visible", async () => {
   const w = await workspace({ size: { width: 80, height: 24 } });
   try {
     const frame = await w.frame();
     expect(frame.split("\n").length).toBeLessThanOrEqual(25);
-    expect(frame).toContain("↑↓ pick  ⏎ play here");
-    expect(frame).toContain("g remix  / add  c playing");
+    expect(frame).toContain("↑↓ ⏎ play  r swap  k keep  x remove  z undo  s save  ? keys");
     expect(frame).toContain("Shape  ◀ Rise & Fall ▶  18 tracks  mix familiar");
     expect(frame).not.toContain("...");
     expect(frame).toContain("Track 0");

@@ -97,6 +97,8 @@ export type ScreenFactory = (context: ScreenContext, params?: Params) => Screen;
  * builder.state -> {presets,recipe,draft|null,fingerprinted,current,seeds,saved}
  * builder.build {recipe?} -> ArcDraft {recipe,slots,targets,confidence,measured,estimated,unmeasured,pool_size,duration_ms,notes,playlist_id}
  * builder.reroll {slot} -> {slot,alternatives}; builder.choose {slot,uri} / builder.pin {slot,pinned} / builder.ban {slot} -> ArcDraft
+ * builder.restore {recipe,uris} / builder.move {from,to} -> ArcDraft (choose also keeps the chosen track in place)
+ * builder.audition {uri} -> {uri,ends_in_ms}; builder.audition_stop -> {stopped}
  * builder.play {slot?} -> {queued,slot}; builder.save {name,public?,overwrite?} -> {id,uri,overwritten,tracks}; builder.coverage -> {fingerprinted,previewed,catalog_measured,catalog_previewed,catalog_tracks,preview_lookup,preview_pending}
  * settings.get -> {values:Record<string,unknown>,bindings:Record<string,string>}
  * settings.action {action:"reload"|"reconnect"|"logout"|"command",command?}

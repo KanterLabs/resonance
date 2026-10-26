@@ -34,6 +34,8 @@ impl Tracker {
     }
 
     pub fn observe(&mut self, track: Option<Track>, playing: bool) {
+        // An audition plays a track the queue does not name; it is not listening to this one.
+        let playing = playing && !crate::builder::audition::active();
         self.observe_at(track, playing, Instant::now());
     }
 

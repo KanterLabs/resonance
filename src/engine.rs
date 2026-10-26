@@ -44,7 +44,7 @@ impl Engine {
             config.clone(),
         ));
         let queue = Arc::new(Queue::new(spotify.clone(), config.clone(), library.clone()));
-        crate::builder::fingerprint::start(spotify.clone(), queue.clone());
+        crate::builder::sampler::start(spotify.clone(), queue.clone());
         crate::builder::preview::queue::start(queue.clone(), library.clone());
 
         #[cfg(feature = "mpris")]
@@ -153,6 +153,7 @@ impl Engine {
     }
 
     fn maintain(&mut self) {
+        crate::builder::audition::maintain(&self.queue);
         self.queue.observe_listening();
         let current = self.queue.get_current().map(|item| item.uri());
         if current != self.prewarmed {
@@ -177,8 +178,10 @@ impl Engine {
                 self.spotify.update_status(state.clone());
                 self.queue.observe_listening();
                 if state == PlayerEvent::FinishedTrack {
-                    self.queue.next(false);
-                } else if state == PlayerEvent::Stopped {
+                    if !crate::builder::audition::finished(&self.spotify) {
+                        self.queue.next(false);
+                    }
+                } else if state == PlayerEvent::Stopped && !crate::builder::audition::active() {
                     self.queue.cancel_radio();
                 }
             }
@@ -299,7 +302,7 @@ impl Engine {
         self.running = false;
         self.queue.finish_listening();
         crate::recommendations::history::shared().flush();
-        crate::builder::fingerprint::flush();
+        crate::builder::sampler::flush();
         crate::builder::preview::shared().save();
         crate::song_map::flush();
         crate::listening_diary::flush();

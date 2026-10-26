@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Arc Studio builds from the playing song as soon as it opens, rebuilds on every change, and keeps
   ↑/↓ on the track list: ←/→ change shape, −/+ length, [/] familiar↔new, g remixes, e edits the
   curve, and Enter plays from the selected track. Each track says why it is there in plain words.
+- Arc Studio editing: **z**/**Z** undo and redo any change exactly; **Shift+↑/↓** (or **<**/**>**)
+  moves a track and keeps it there; **a** auditions a track for 20 seconds and then returns to
+  what was playing; **m** switches length between tracks and minutes; **f** lists the starting
+  songs so any one can be removed; **S** saves as a new playlist. In curve editing, **1**–**9**
+  and **0** set a point's level, **Shift+←/→** slides it, and **n**/**d** add and delete points.
+- The Arc Studio chart draws each track where its energy landed, marks tracks far from the curve,
+  and points at the selected track. The heading shows whether the arc has unsaved changes.
 - `resonance arcs-debug` prints an arc built from cached music without logging in.
 - Learn each track's energy, tempo, brightness, and how it starts and ends by sampling the audio
   tap during normal playback. Only summary numbers are stored (`fingerprints.json` in the cache
@@ -27,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`previews.json`). Turn it off with `arcs_preview_lookup = false`.
 
 ### Changed
+
+- Arc Studio keeps a track you swap in where you put it, so later shape, length, or mix changes
+  no longer replace it. Keys pressed while an arc is rebuilding wait for it instead of being
+  dropped, and removing a starting song says so.
+- Arc Studio shows one legend line of its most used keys; Help lists every key. On tall terminals
+  action results get their own line instead of replacing the selected track's explanation.
 
 - Rename the maintained application to Resonance. New Unix installs use the `resonance` backend,
   standalone `resonance-opentui` frontend, generated Resonance man/completion assets, and the

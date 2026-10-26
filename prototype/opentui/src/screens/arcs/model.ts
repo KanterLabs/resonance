@@ -61,6 +61,8 @@ export interface Coverage {
   preview_pending?: number;
 }
 export interface SeedRow { uri: string; title: string; artists: string[] }
+/** A playlist an arc created, from `builder.state`. */
+export interface SavedArcRow { playlist_id: string; name: string; saved_at?: number }
 export interface ArcState {
   presets?: Preset[];
   recipe?: Recipe;
@@ -68,6 +70,7 @@ export interface ArcState {
   fingerprinted?: number;
   current?: SeedRow | null;
   seeds?: SeedRow[];
+  saved?: SavedArcRow[];
 }
 
 const points = (levels: number[]): CurvePoint[] => levels.map((energy, i) => ({ x: i / (levels.length - 1), energy }));
@@ -160,8 +163,24 @@ export function nextPreset(presets: Preset[], current: string | null | undefined
 export function presetLabel(presets: Preset[], id: string | null | undefined): string {
   return (presets.length ? presets : DEFAULT_PRESETS).find(preset => preset.id === id)?.label ?? "Custom";
 }
-export function lengthLabel(length: Length): string {
-  return "tracks" in length ? `${length.tracks} tracks` : `${length.minutes} min`;
+/** The length as set, and with a draft what it came to in the other unit. */
+export function lengthLabel(length: Length, draft?: ArcDraft | null): string {
+  if ("tracks" in length) return `${length.tracks} tracks${draft?.slots.length ? ` (${formatDuration(draft.duration_ms)})` : ""}`;
+  return `${length.minutes} min${draft?.slots.length ? ` (${draft.slots.length} tracks)` : ""}`;
+}
+/** Switch between a track count and minutes, converting from the current draft. */
+export function toggleLength(length: Length, draft?: ArcDraft | null): Length {
+  if ("tracks" in length) return { minutes: draft?.slots.length ? clamp(Math.round(draft.duration_ms / 600_000) * 10, 20, 300) : 60 };
+  return { tracks: draft?.slots.length ? clamp(draft.slots.length, 5, 100) : 18 };
+}
+/** Starting songs by title, as many as fit in `width`, then how many more there are. */
+export function seedsLabel(seeds: SeedRow[], width: number): string {
+  const titles = seeds.map(seed => seed.title);
+  for (let shown = titles.length; shown > 1; shown--) {
+    const text = titles.slice(0, shown).join(" · ") + (shown < titles.length ? `  +${titles.length - shown}` : "");
+    if ([...text].length <= width) return text;
+  }
+  return titles.length > 1 ? `${titles[0]}  +${titles.length - 1}` : titles[0] ?? "";
 }
 export function adjustLength(length: Length, step: number): Length {
   if ("tracks" in length) return { tracks: clamp(length.tracks + step * 2, 5, 100) };
@@ -196,26 +215,30 @@ export function slotExplanation(slot: ArcSlot): string {
 export function mixLabel(discovery: number): string {
   return `familiar ${dial(discovery, 8)} new`;
 }
-export type Legend = "arc" | "edit" | "swap" | "seed" | "empty";
+export type Legend = "arc" | "edit" | "swap" | "seed" | "seeds" | "empty";
 /** Narrow-terminal legends: the same keys in fewer words, so nothing is cut off at 80 columns. */
-export const COMPACT_LEGENDS: Record<Legend, [string, string]> = {
-  arc: ["↑↓ pick  ⏎ play here  p play  r swap  k keep  x remove  s save", "←→ shape  e curve  −+ length  [] mix  g remix  / add  c playing"],
-  edit: ["Curve: ←→ point  ↑↓ raise/lower  ⏎/Esc done", "The arc rebuilds as you edit"],
-  swap: ["Swap: ↑↓ pick  ⏎ use it  Esc keep current", ""],
-  seed: ["Add song: ↑↓ pick  ⏎ add  Esc back", ""],
-  empty: ["Play a song, then press c to build an arc", "/ search for a starting song  ·  ←→ shape"],
+export const COMPACT_LEGENDS: Record<Legend, string> = {
+  arc: "↑↓ ⏎ play  r swap  k keep  x remove  z undo  s save  ? keys",
+  edit: "Curve: ←→ point  ↑↓/0–9 level  ⇧←→ slide  n add  d del  ⏎ done",
+  swap: "Swap: ↑↓ pick  ⏎ use it  a listen  Esc keep current",
+  seed: "Add song: ↑↓ pick  ⏎ add  Esc back",
+  seeds: "Starting songs: ↑↓  x remove  / add  c add playing  Esc back",
+  empty: "Play a song, then press c  ·  / choose a starting song",
 };
-export const LEGENDS: Record<Legend, [string, string]> = {
-  arc: ["↑↓ pick  ⏎ play from here  p play all  r swap  k keep  x remove  s save", "←→ shape  e edit curve  −/+ length  [/] mix  g remix  / add song  c from playing  ⌫ drop song"],
-  edit: ["Editing curve: ←→ choose point  ↑↓ raise/lower", "⏎ or Esc done  ·  the arc rebuilds as you edit"],
-  swap: ["Swap: ↑↓ pick a replacement  ⏎ use it", "Esc keep the current track"],
-  seed: ["Add a starting song: ↑↓ pick  ⏎ add", "Esc back to the arc"],
-  empty: ["Play a song, then press c to build an arc from it", "/ search for a starting song  ·  ←→ choose a shape first if you like"],
+/** One line of the keys used most in each mode; Help lists every key. */
+export const LEGENDS: Record<Legend, string> = {
+  arc: "↑↓ pick  ⏎ play from here  r swap  k keep  x remove  z undo  s save  a listen  ? all keys",
+  edit: "Editing curve: ←→ point  ↑↓ or 0–9 level  ⇧←→ slide  n add  d delete  ⏎ done",
+  swap: "Swap: ↑↓ pick a replacement  ⏎ use it  a listen  Esc keep the current track",
+  seed: "Add a starting song: ↑↓ pick  ⏎ add  Esc back to the arc",
+  seeds: "Starting songs: ↑↓ pick  x remove  / add a song  c add the playing song  Esc back",
+  empty: "Play a song, then press c to build an arc from it  ·  / choose a starting song",
 };
 export function summary(draft: ArcDraft): string {
   const count = draft.slots.length;
   const known = draft.slots.filter(slot => slot.measure !== "unmeasured").length;
-  const head = `${count} track${count === 1 ? "" : "s"} · ${formatDuration(draft.duration_ms)}`;
+  const fit = count ? ` · fit ${Math.round(draft.slots.reduce((sum, slot) => sum + slot.curve_fit, 0) / count * 100)}%` : "";
+  const head = `${count} track${count === 1 ? "" : "s"} · ${formatDuration(draft.duration_ms)}${fit}`;
   if (count && known * 2 < count) return `${head} · energy known for ${known} of ${count}: play the arc and each song teaches the shape`;
   return `${head} · confidence ${Math.round(draft.confidence * 100)}% · energy known for ${known} of ${count}`;
 }

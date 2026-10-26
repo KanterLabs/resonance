@@ -87,6 +87,14 @@ try {
   assert.ok(arc.notes.some(note => note.includes("ran out")), "short arc did not explain its length");
   const pinnedArc = await client.call<ArcReply>("builder.pin", { slot: 1, pinned: true });
   assert.equal(pinnedArc.slots[1]?.pinned, true);
+  const order = pinnedArc.slots.map(slot => slot.uri);
+  const movedArc = await client.call<ArcReply>("builder.move", { from: 1, to: 0 });
+  assert.deepEqual(movedArc.slots.map(slot => slot.uri), [order[1], order[0]]);
+  assert.equal(movedArc.slots[0]?.pinned, true, "a moved track was not kept in place");
+  const restoredArc = await client.call<ArcReply & { recipe: unknown }>("builder.restore", { recipe: { seeds: ["spotify:track:FixtureTrackAlpha00001"], length: { tracks: 5 } }, uris: order });
+  assert.deepEqual(restoredArc.slots.map(slot => slot.uri), order, "restore did not put the tracks back in order");
+  await assert.rejects(client.call("builder.move", { from: 0, to: 9 }), error => error instanceof RpcError && error.code === "arc_error");
+  assert.deepEqual(await client.call("builder.audition_stop"), { stopped: false });
   await assert.rejects(client.call("builder.reroll", { slot: 9 }), error => error instanceof RpcError && error.code === "arc_error");
   await assert.rejects(client.call("builder.build", { recipe: { curve: [{ x: 0, energy: 0.5 }] } }), error => error instanceof RpcError && error.code === "invalid_params");
   await assert.rejects(client.call("player.action", { action: "volume", value: 101 }), error => error instanceof RpcError && error.code === "invalid_params");

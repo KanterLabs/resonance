@@ -3,7 +3,7 @@ use super::{Result, RpcService, fail, invalid, number, remote, string};
 use crate::builder::{
     self, fingerprint,
     recipe::{Preset, Recipe},
-    solve::{Draft, Slot},
+    solve::{Draft, Pool, Slot},
 };
 use crate::model::{playable::Playable, track::Track};
 use crate::traits::ListItem;
@@ -117,40 +117,47 @@ pub(super) fn dispatch(rpc: &RpcService, method: &str, p: &Value) -> Result<Valu
             }))
         }
         "builder.build" => {
-            let mut recipe: Recipe = match p.get("recipe") {
-                Some(value) => serde_json::from_value(value.clone())
-                    .map_err(|error| invalid(format!("invalid recipe: {error}")))?,
-                None => Recipe::default(),
-            };
-            if recipe.seeds.is_empty()
-                && let Some(current) = rpc.queue.get_current().and_then(|p| p.track())
-                && !current.is_local
-            {
-                recipe.seeds.push(current.uri.clone());
-            }
-            recipe.normalize().map_err(invalid)?;
-            if recipe.seeds.is_empty() {
-                return Err(fail(
-                    "not_ready",
-                    "Play a song or add a seed to build an arc",
-                ));
-            }
-            let seeds = recipe
-                .seeds
-                .iter()
-                .map(|uri| seed_track(rpc, uri))
-                .collect::<Result<Vec<_>>>()?;
-            let pool = builder::pool(&rpc.queue, &rpc.library, &seeds, recipe.discovery);
-            if pool.len() < 2 {
-                return Err(fail(
-                    "empty_pool",
-                    "Not enough cached tracks near these seeds yet; browse or play more music",
-                ));
-            }
+            let recipe = parse_recipe(rpc, p)?;
+            let pool = arc_pool(rpc, &recipe)?;
             let built = service.build(pool, recipe.clone());
             let playlist_id = service.active_snapshot().and_then(|(_, _, id)| id);
             Ok(draft(&built, &recipe, playlist_id.as_deref()))
         }
+        "builder.restore" => {
+            let recipe = parse_recipe(rpc, p)?;
+            let uris: Vec<String> = p
+                .get("uris")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid("uris required"))?
+                .iter()
+                .filter_map(|uri| uri.as_str().map(str::to_string))
+                .collect();
+            let pool = if service.same_pool(&recipe) {
+                None
+            } else {
+                Some(arc_pool(rpc, &recipe)?)
+            };
+            service.restore(pool, recipe, &uris).map_err(rejected)?;
+            active_draft()
+        }
+        "builder.move" => {
+            let from = number(p, "from", 0, usize::MAX)?;
+            let to = number(p, "to", 0, usize::MAX)?;
+            service.move_slot(from, to).map_err(rejected)?;
+            active_draft()
+        }
+        "builder.audition" => {
+            let uri = string(p, "uri")?;
+            let track = match service.pool_track(uri) {
+                Some(track) => track,
+                None => seed_track(rpc, uri)?,
+            };
+            let length = builder::audition::start(&rpc.queue, track).map_err(rejected)?;
+            Ok(json!({"uri": uri, "ends_in_ms": length.as_millis() as u64}))
+        }
+        "builder.audition_stop" => Ok(json!({
+            "stopped": builder::audition::stop(&rpc.queue.get_spotify())
+        })),
         "builder.reroll" => {
             let index = number(p, "slot", 0, usize::MAX)?;
             let options = service
@@ -197,6 +204,46 @@ pub(super) fn dispatch(rpc: &RpcService, method: &str, p: &Value) -> Result<Valu
         "builder.save" => save_arc(rpc, p),
         _ => Err(fail("unknown_method", format!("Unknown method {method}"))),
     }
+}
+
+/// The recipe in `p`, brought into range, seeded from the playing song when it has no seeds.
+fn parse_recipe(rpc: &RpcService, p: &Value) -> Result<Recipe> {
+    let mut recipe: Recipe = match p.get("recipe") {
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|error| invalid(format!("invalid recipe: {error}")))?,
+        None => Recipe::default(),
+    };
+    if recipe.seeds.is_empty()
+        && let Some(current) = rpc.queue.get_current().and_then(|p| p.track())
+        && !current.is_local
+    {
+        recipe.seeds.push(current.uri.clone());
+    }
+    recipe.normalize().map_err(invalid)?;
+    if recipe.seeds.is_empty() {
+        return Err(fail(
+            "not_ready",
+            "Play a song or add a seed to build an arc",
+        ));
+    }
+    Ok(recipe)
+}
+
+/// The candidates an arc with this recipe draws from, gathered from the cache.
+fn arc_pool(rpc: &RpcService, recipe: &Recipe) -> Result<Pool> {
+    let seeds = recipe
+        .seeds
+        .iter()
+        .map(|uri| seed_track(rpc, uri))
+        .collect::<Result<Vec<_>>>()?;
+    let pool = builder::pool(&rpc.queue, &rpc.library, &seeds, recipe.discovery);
+    if pool.len() < 2 {
+        return Err(fail(
+            "empty_pool",
+            "Not enough cached tracks near these seeds yet; browse or play more music",
+        ));
+    }
+    Ok(pool)
 }
 
 fn active_draft() -> Result<Value> {

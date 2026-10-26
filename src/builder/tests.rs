@@ -452,3 +452,105 @@ fn a_preview_ranks_between_a_listen_and_heard_loudness() {
         );
     }
 }
+
+/// A service with an arc built from the fixture, for the editing operations.
+fn service_with_arc(fixture: &Fixture, recipe: Recipe) -> super::Service {
+    let service = super::Service::default();
+    service.build(pool_for(fixture), recipe);
+    service
+}
+
+fn active(service: &super::Service) -> (Recipe, super::solve::Draft) {
+    let (recipe, draft, _) = service.active_snapshot().expect("an active arc");
+    (recipe, draft)
+}
+
+#[test]
+fn a_swapped_in_track_survives_rebuilds() {
+    let fixture = fixture(true);
+    let service = service_with_arc(&fixture, recipe(&fixture));
+    let pick = service.alternatives(12, 1).unwrap()[0].track.uri.clone();
+    let chosen = service.choose(12, &pick).unwrap();
+    assert_eq!(chosen.slots[12].track.uri, pick);
+    assert!(chosen.slots[12].pinned);
+    // Another shape, then a shorter arc than the slot it was kept in.
+    let (mut next, _) = active(&service);
+    next.curve = Preset::WindDown.curve();
+    let reshaped = service.build(pool_for(&fixture), next.clone());
+    assert!(uris(&reshaped).contains(&pick));
+    next.length = Length::Tracks(8);
+    let shorter = service.build(pool_for(&fixture), next);
+    assert!(uris(&shorter).contains(&pick));
+}
+
+#[test]
+fn moving_a_track_keeps_it_where_it_was_put() {
+    let fixture = fixture(true);
+    let service = service_with_arc(&fixture, recipe(&fixture));
+    let (_, before) = active(&service);
+    service.pin(9, true).unwrap();
+    let kept = before.slots[9].track.uri.clone();
+    let moved = before.slots[2].track.uri.clone();
+    let after = service.move_slot(2, 5).unwrap();
+    let mut expected = uris(&before);
+    let item = expected.remove(2);
+    expected.insert(5, item);
+    assert_eq!(uris(&after), expected);
+    assert!(after.slots[5].pinned);
+    let (recipe, _) = active(&service);
+    let slot_of = |uri: &str| {
+        recipe
+            .pins
+            .iter()
+            .find(|pin| pin.uri == uri)
+            .and_then(|pin| pin.slot)
+    };
+    assert_eq!(slot_of(&moved), Some(5));
+    assert_eq!(slot_of(&kept), Some(9));
+    // Moving onto itself changes nothing; outside the arc is an error.
+    assert_eq!(uris(&service.move_slot(4, 4).unwrap()), expected);
+    assert!(service.move_slot(0, 99).is_err());
+}
+
+#[test]
+fn restoring_puts_back_exactly_the_same_tracks() {
+    let fixture = fixture(true);
+    let service = service_with_arc(&fixture, recipe(&fixture));
+    let (recipe_before, before) = active(&service);
+    service.ban(3).unwrap();
+    service.move_slot(0, 6).unwrap();
+    assert!(service.same_pool(&recipe_before));
+    let restored = service
+        .restore(None, recipe_before.clone(), &uris(&before))
+        .unwrap();
+    assert_eq!(uris(&restored), uris(&before));
+    let (recipe_after, _) = active(&service);
+    assert!(recipe_after.bans.is_empty());
+    // Tracks no longer in the pool are dropped rather than failing.
+    let mut stale = uris(&before);
+    stale.insert(1, "spotify:track:gone".into());
+    let trimmed = service.restore(None, recipe_before, &stale).unwrap();
+    assert_eq!(uris(&trimmed), uris(&before));
+    assert!(
+        super::Service::default()
+            .restore(None, Recipe::default(), &[])
+            .is_err()
+    );
+}
+
+#[test]
+fn curves_from_two_to_twelve_points_solve() {
+    let fixture = fixture(true);
+    let pool = pool_for(&fixture);
+    for count in [2, 12] {
+        let mut recipe = recipe(&fixture);
+        recipe.curve = (0..count)
+            .map(|i| CurvePoint {
+                x: i as f64 / (count - 1) as f64,
+                energy: if i % 2 == 0 { 0.2 } else { 0.8 },
+            })
+            .collect();
+        recipe.normalize().unwrap();
+        assert_eq!(solve(&pool, &recipe).slots.len(), 16);
+    }
+}

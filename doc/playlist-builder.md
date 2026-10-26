@@ -64,8 +64,9 @@ line under the selected row.
 ### Controls
 
 Arc Studio builds an arc from the playing song as soon as it opens, and every change rebuilds it.
-The track list always owns **↑/↓**, like every other screen. Two legend lines at the top show the
-keys for the current mode.
+The track list always owns **↑/↓**, like every other screen. One legend line at the top shows the
+most used keys for the current mode; Help (`?`) lists them all. The UX pass behind the newer keys
+is described in [Arc Studio UX pass](arc-studio-ux.md).
 
 | Key | Action |
 |---|---|
@@ -74,18 +75,28 @@ keys for the current mode.
 | `p` | Play the whole arc from the start |
 | `←` `→` | Previous / next shape (preset) |
 | `-` `+` | Shorter / longer |
+| `m` | Switch the length between tracks and minutes |
 | `[` `]` | More familiar / more new music |
 | `g` | Remix: same shape and songs, different picks (kept tracks stay) |
-| `r` | Swap the selected track: pick a replacement with `↑↓ Enter`, `Esc` keeps it |
+| `r` | Swap the selected track: pick a replacement with `↑↓ Enter` (it is kept in place), `a` auditions one, `Esc` keeps the current track |
 | `k` | Keep the selected track in place |
 | `x` | Remove the selected track; it will not come back in this arc |
+| `Shift+↑` `Shift+↓`, `<` `>` | Move the selected track and keep it where it lands |
+| `z` / `Z` | Undo / redo the last change, restoring exactly the tracks that were there |
+| `a` | Audition the selected track for 20 s from 30% in, then return to what was playing (`a` or `Esc` stops) |
 | `/` | Search for a starting song to add |
+| `f` | List the starting songs: `x` removes one, `/` adds one, `c` adds the playing song |
 | `c` | Start over from the song playing now |
 | `Backspace` | Drop the last starting song |
-| `e` | Edit the curve: `←→` choose a point, `↑↓` raise or lower it, `Enter`/`Esc` done |
+| `e` | Edit the curve: `←→` choose a point, `↑↓` raise or lower it, `1`–`9` set 10–90% and `0` 100%, `Shift+←→` slide it, `n` add a point, `d` delete it, `Enter`/`Esc` done |
 | `s` | Save as a private playlist (later saves update that same playlist) |
+| `S` | Save as a new private playlist |
 | `u` | Rebuild with songs measured since the arc was built |
 | `Esc` | Back to Now Playing |
+
+The chart draws each track where its energy landed: `●` for measured energy, `○` for a guess,
+in the warning colour when it sits more than 20 points from the curve. A `▲` under the chart
+follows the selected track. The heading says whether the arc matches the playlist it was saved to.
 
 Rows mark each track's energy: a bar when it is known, `·` when it has not been learned yet, `◆`
 for kept tracks and `✦` for starting songs. Until most energies are known the summary says so:
@@ -130,56 +141,10 @@ Each file stays well below the 1000-line cap.
 RPC handlers live in `src/rpc/builder.rs` as free functions (the workspace denies
 `clippy::multiple_inherent_impl`) rather than growing `rpc.rs`.
 
-### Fingerprints
+### Energy measurement
 
-Spotify exposes no audio analysis to this app, so Resonance measures tracks as they play.
-
-```rust
-pub struct Fingerprint {
-    pub version: u16,
-    pub energy: f32,            // 0..=1, normalized mean RMS level weighted by band density
-    pub dynamics: f32,          // 0..=1, loudness variance across the track
-    pub brightness: f32,        // 0..=1, spectral centroid from AudioTap::bands
-    pub tempo: Option<f32>,     // BPM, folded into 60..=180
-    pub tempo_confidence: f32,  // share of beat intervals within 6% of the median
-    pub intro_energy: f32,      // mean level of the first 10% (from waveform buckets)
-    pub outro_energy: f32,      // mean level of the last 10%
-    pub listened_ms: u64,       // audio actually observed
-    pub measured_at: i64,       // unix seconds
-}
-```
-
-- **Collection:** a `Collector` attached beside the waveform recorder samples `AudioTap::level`,
-  `bands(16)`, and beat intervals about 10 times per second while a track plays. It runs no
-  extra FFT; it reads the tap's existing outputs.
-- **Commit rule:** save when at least 45 s or 60% of the track was heard, whichever is shorter.
-  A later listen with more observed audio replaces an earlier one.
-- **Tempo:** the tap's median-gap `tempo()` is tuned for animation. The collector keeps its own
-  interval histogram over the whole listen and reports a tempo only when `tempo_confidence ≥ 0.5`.
-  Otherwise `tempo` is `None` and shown as `~`.
-- **Normalization:** raw energy depends on mastering loudness, so `energy` is stored raw and
-  normalized at solve time against percentiles of the fingerprinted library.
-- **Storage:** `fingerprints.json` under `config::cache_path`, keyed by track URI with an
-  `engine::song_key` index so another release of the same song reuses the measurement. The format
-  is versioned and owned by this module, following the `waveform.rs` and `enrichment.rs` pattern,
-  with atomic temp-file writes. Cap: 50,000 entries, evicting the oldest `measured_at` first.
-- **Privacy:** the store holds no audio, only the summary numbers above.
-
-### Previewed energy
-
-Tracks without a fingerprint are measured from Deezer's 30 second previews by a background thread
-(`builder::preview`), through the same analysis the tap runs during playback. Previews are kept in
-`previews.json`, apart from fingerprints, and their energy is calibrated onto the listened scale
-before the library percentile. A preview has no intro or outro, so its edges score neutrally in
-transitions. The solver trusts measures in this order: measured, previewed, heard, estimated,
-unmeasured. Details and the benchmark behind it are in [deezer-previews.md](deezer-previews.md).
-
-### Estimated energy for unmeasured tracks
-
-Early on most of the library is unmeasured. For an unmeasured candidate the solver estimates
-energy as the affinity-weighted mean of measured tracks that share its artist, album, or
-playlists, and flags the slot `estimated`. With no neighbours it uses 0.5 and flags it
-`unmeasured`. Both lower slot confidence; neither is hidden.
+Fingerprints learned during playback, energy measured from Deezer previews, and estimates for
+tracks not measured yet are described in [Arcs: measuring energy](arc-energy.md).
 
 ### Recipe
 
@@ -286,6 +251,10 @@ budget, so they are synchronous in v1.
 | `builder.play` | — | `{ queued }` |
 | `builder.save` | `{ name, public?, overwrite? }` | `{ playlist_id, uri }` |
 | `builder.coverage` | — | `{ fingerprinted, total, percent }` |
+| `builder.restore` | `{ recipe, uris }` | `{ draft }`: exactly these tracks, for undo |
+| `builder.move` | `{ from, to }` | `{ draft }`: the moved track is kept at `to` |
+| `builder.audition` | `{ uri }` | `{ uri, ends_in_ms }` |
+| `builder.audition_stop` | — | `{ stopped }` |
 
 TypeScript types go in `prototype/opentui/src/workspace/contracts.ts`, and the contract test
 `test/engine-contract.ts` gains fixtures for each method.
@@ -367,23 +336,4 @@ OpenTUI (`bun test`):
 
 ## v1 as shipped
 
-Differences from the plan above, recorded when v1 landed:
-
-- **Scoring:** the curve term is `max(0, 1 - 2.5·|energy - target|)` rather than linear, so a
-  flat curve such as Steady Focus is followed closely even when affinity varies a lot.
-- **Pool:** each seed is ranked twice, once with the legacy ranking (broad, with fallback) and once
-  at the recipe's discovery level (seed-related only), and the better affinity per track is kept.
-  Seeds are always in their own arc and are placed where their energy fits the curve.
-- **Sampling:** a background thread in the engine reads the audio tap ten times a second, so
-  fingerprints are learned under OpenTUI, `--headless`, and the legacy UI alike.
-- **Heard energy:** tracks without a fingerprint use the loudness the waveform cache recorded the
-  last time they played, stretched from its 0.4–0.95 band onto 0–1. Estimates borrow only from the
-  same album or artist; playlists were too mixed and spread one quiet song across dozens.
-- **Plain reasons:** engine evidence is reworded ("in a playlist with your starting song", "you
-  usually play it through") and bookkeeping reasons such as tie-breaks are dropped.
-- **`resonance arcs-debug`** prints an arc built from the cache without logging in:
-  `--seed URI` (repeatable), `--preset`, `--tracks`, `--discovery`, `--rng-seed`.
-- **Deferred to a later release:** replay snapshots, the
-  `arcs_recipe_in_description` setting (it is only useful with rebuild-from-description), and a
-  Settings diagnostics panel. Coverage is shown on the Arcs screen and via `builder.coverage`.
-- **Offline demo:** `DemoApi` builds illustrative arcs from its fixtures; saving is unavailable.
+Differences from this plan, recorded when v1 landed, are in [Arcs v1 as shipped](arc-v1-shipped.md).

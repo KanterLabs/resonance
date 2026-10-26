@@ -3,11 +3,14 @@
 //! The solver is pure; this module owns the one draft being edited, the pool it was drawn
 //! from, and the small file of recipes and playlists arcs have created.
 
+pub mod audition;
 pub mod deezer;
 pub mod fingerprint;
 pub mod offline;
 pub mod preview;
 pub mod recipe;
+mod report;
+pub mod sampler;
 pub mod solve;
 pub mod transition;
 
@@ -24,6 +27,7 @@ use crate::model::track::Track;
 use crate::queue::Queue;
 use crate::recommendations::{self, engine::song_key, history};
 use recipe::{Pin, Recipe};
+pub use report::offline_report;
 use solve::{Draft, Pool, PoolInput, Slot};
 
 #[cfg_attr(test, allow(dead_code))]
@@ -240,7 +244,15 @@ impl Service {
             }
             let mut sequence = uris(&active.draft);
             let replaced = std::mem::replace(&mut sequence[slot], uri.to_string());
-            active.recipe.pins.retain(|pin| pin.uri != replaced);
+            // A track picked by hand is kept where it was put, so later rebuilds keep it.
+            active
+                .recipe
+                .pins
+                .retain(|pin| pin.uri != replaced && pin.uri != uri);
+            active.recipe.pins.push(Pin {
+                uri: uri.to_string(),
+                slot: Some(slot),
+            });
             rebuild(active, &sequence);
             Ok(active.draft.clone())
         })
@@ -261,6 +273,82 @@ impl Service {
             rebuild(active, &sequence);
             Ok(active.draft.clone())
         })
+    }
+
+    /// Move a track to another slot and keep it there. Other kept tracks keep their tracks,
+    /// following them to wherever the move shifted them.
+    pub fn move_slot(&self, from: usize, to: usize) -> Result<Draft, String> {
+        self.with_active(|active| {
+            check_slot(&active.draft, from)?;
+            check_slot(&active.draft, to)?;
+            if from == to {
+                return Ok(active.draft.clone());
+            }
+            let mut sequence = uris(&active.draft);
+            let uri = sequence.remove(from);
+            sequence.insert(to, uri.clone());
+            active.recipe.pins.retain(|pin| pin.uri != uri);
+            for pin in &mut active.recipe.pins {
+                if pin.slot.is_some()
+                    && let Some(position) = sequence.iter().position(|item| *item == pin.uri)
+                {
+                    pin.slot = Some(position);
+                }
+            }
+            active.recipe.pins.push(Pin {
+                uri,
+                slot: Some(to),
+            });
+            rebuild(active, &sequence);
+            Ok(active.draft.clone())
+        })
+    }
+
+    /// Whether `recipe` draws from the same pool as the active arc, so it can be restored
+    /// without gathering candidates again.
+    pub fn same_pool(&self, recipe: &Recipe) -> bool {
+        self.active.lock().unwrap().as_ref().is_some_and(|active| {
+            active.recipe.seeds == recipe.seeds && active.recipe.discovery == recipe.discovery
+        })
+    }
+
+    /// Put an arc back exactly as it was: this recipe, these tracks, in this order. `pool`
+    /// replaces the active pool when the seeds or discovery changed; None keeps it. Tracks
+    /// that have since left the pool are dropped.
+    pub fn restore(
+        &self,
+        pool: Option<Pool>,
+        recipe: Recipe,
+        uris: &[String],
+    ) -> Result<Draft, String> {
+        let mut guard = self.active.lock().unwrap();
+        let (pool, playlist_id) = match (pool, guard.take()) {
+            (Some(pool), previous) => (pool, previous.and_then(|active| active.playlist_id)),
+            (None, Some(active)) => (active.pool, active.playlist_id),
+            (None, None) => return Err("Build an arc first".into()),
+        };
+        let uris: Vec<String> = uris
+            .iter()
+            .filter(|uri| pool.get(uri).is_some())
+            .cloned()
+            .collect();
+        let draft = solve::assemble(&pool, &recipe, &uris, &recipe.targets(uris.len()));
+        *guard = Some(Active {
+            recipe: recipe.clone(),
+            pool,
+            draft: draft.clone(),
+            playlist_id,
+        });
+        drop(guard);
+        self.with_store(|stored| stored.last = Some(recipe));
+        Ok(draft)
+    }
+
+    /// A track from the active arc's pool, for auditioning without a network request.
+    pub fn pool_track(&self, uri: &str) -> Option<Track> {
+        let active = self.active.lock().unwrap();
+        let candidate = active.as_ref()?.pool.get(uri)?;
+        Some(candidate.track.clone())
     }
 
     /// Ban a slot's track from this arc and fill the slot with the best alternative.
@@ -338,105 +426,6 @@ impl Service {
         }
         result
     }
-}
-
-/// Build an arc from the cache without logging in and describe it, for `arcs-debug`.
-pub fn offline_report(
-    seeds: Vec<String>,
-    preset: Option<String>,
-    tracks: usize,
-    discovery: u8,
-    rng_seed: u64,
-) -> Result<String, String> {
-    use std::fmt::Write;
-    let catalog = recommendations::offline_catalog()?;
-    let find = |wanted: &str| {
-        catalog
-            .tracks
-            .iter()
-            .find(|track| track.uri == wanted || track.id.as_deref() == Some(wanted))
-            .cloned()
-            .ok_or_else(|| format!("Seed {wanted} isn't in the local catalog"))
-    };
-    let seeds = if seeds.is_empty() {
-        vec![
-            catalog
-                .tracks
-                .iter()
-                .find(|track| !track.is_local && track.id.is_some())
-                .cloned()
-                .ok_or("No cached songs; play or search for music first")?,
-        ]
-    } else {
-        seeds
-            .iter()
-            .map(|seed| find(seed))
-            .collect::<Result<Vec<_>, _>>()?
-    };
-    let preset = match preset {
-        Some(id) => recipe::Preset::from_id(&id).ok_or_else(|| {
-            let known: Vec<_> = recipe::Preset::ALL.iter().map(|p| p.id()).collect();
-            format!("Unknown preset {id}; choose one of {}", known.join(", "))
-        })?,
-        None => recipe::Preset::RiseAndFall,
-    };
-    let mut recipe = Recipe {
-        seeds: seeds.iter().map(|track| track.uri.clone()).collect(),
-        curve: preset.curve(),
-        length: recipe::Length::Tracks(tracks),
-        discovery,
-        rng_seed,
-        preset: Some(preset.id().to_string()),
-        ..Recipe::default()
-    };
-    recipe.normalize()?;
-    let history = history::shared();
-    let measured = Measurements::of(catalog.tracks.iter().chain(&seeds));
-    let pool = Pool::build(&PoolInput {
-        catalog: &catalog,
-        seeds: &seeds,
-        discovery: recipe.discovery,
-        feedback: &history.snapshot(),
-        recent: &history.recent(),
-        fingerprints: &measured.fingerprints,
-        library_energies: &measured.energies,
-        previews: &measured.previews,
-        heard: &measured.heard,
-    });
-    let started = std::time::Instant::now();
-    let draft = solve::solve(&pool, &recipe);
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "{} arc from {} · {} tracks · pool {} of {} cached · {} fingerprinted · {} previewed · {} heard · confidence {:.0}% · {} ms",
-        preset.label(),
-        seeds[0].title,
-        draft.slots.len(),
-        pool.len(),
-        catalog.tracks.len(),
-        fingerprint::shared().len(),
-        measured.previews.len(),
-        measured.heard.len(),
-        draft.confidence * 100.0,
-        started.elapsed().as_millis()
-    );
-    for note in &draft.notes {
-        let _ = writeln!(out, "note: {note}");
-    }
-    for (index, slot) in draft.slots.iter().enumerate() {
-        let _ = writeln!(
-            out,
-            "{:>2}. target {:.2} energy {:.2} {:<10} {} — {}  [{}]",
-            index + 1,
-            slot.target,
-            slot.energy,
-            format!("{:?}", slot.measure).to_lowercase(),
-            slot.track.title,
-            slot.track.artists.join(", "),
-            slot.reasons.join("; ")
-        );
-    }
-    Ok(out)
 }
 
 fn check_slot(draft: &Draft, slot: usize) -> Result<(), String> {

@@ -211,6 +211,9 @@ impl WaveformStore {
 /// Called from the views that draw often, since what they are really doing is
 /// sampling: the more frames a view draws, the finer the shape it learns.
 pub fn observe(spotify: &Spotify, queue: &Queue) {
+    if crate::builder::audition::active() {
+        return;
+    }
     if !matches!(spotify.get_current_status(), PlayerEvent::Playing(_)) {
         return;
     }

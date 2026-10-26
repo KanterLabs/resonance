@@ -49,7 +49,7 @@ test("slot rows stay compact and the why line explains placement", () => {
   expect(slotRow({ ...slot, pinned: false }).title).toBe("02 ▃ Teardrop");
   expect(whyLine(slot)).toBe("Why Teardrop: kept in place · shares 3 playlists with the seed · energy 0.38 ≈ target 0.40");
   const draft: ArcDraft = { recipe: normalizeRecipe(undefined), slots: [slot], targets: [0.4], confidence: 0.72, measured: 1, estimated: 0, unmeasured: 0, pool_size: 40, duration_ms: 330_000, notes: [], playlist_id: null };
-  expect(summary(draft)).toBe("1 track · 6m · confidence 72% · energy known for 1 of 1");
+  expect(summary(draft)).toBe("1 track · 6m · fit 95% · confidence 72% · energy known for 1 of 1");
   expect(summary({ ...draft, slots: [{ ...slot, measure: "unmeasured" }, slot, { ...slot, measure: "unmeasured" }] })).toContain("energy known for 1 of 3: play the arc");
   expect(slotRow({ ...slot, pinned: false, measure: "unmeasured" }).title).toBe("02 · Teardrop");
 });

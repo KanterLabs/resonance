@@ -48,7 +48,7 @@ In the legacy interface, F5 / `:prototype` still opens a separate companion term
 | 6 | Podcasts | Saved shows, episodes, playback and queue actions |
 | 7 | Radio | Station start/stop, Discovery adjustment, local diagnostics |
 | H | Diary | A year of listening as a heatmap, and this month's most played artists |
-| 0 | Arc Studio | Auto-built arc from the playing song; shapes, length, mix, swap/keep/remove, play from a track, save ([guide](playlist-builder.md)) |
+| 0 | Arc Studio | Auto-built arc from the playing song; shapes, length, mix, swap/keep/remove/move, undo, audition, play from a track, save ([guide](playlist-builder.md)) |
 | 8 | Settings | Configuration inspection, reload, reconnect, logout, motion preference |
 | ? | Help | Effective workspace/configured bindings and command entry |
 | 9 | Cast | Discover Spotify Connect/Roku targets, connect, disconnect |
