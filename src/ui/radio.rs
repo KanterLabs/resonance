@@ -28,7 +28,7 @@ pub(crate) fn start(
     if track.id.is_none() || track.is_local {
         return;
     }
-    queue.start_radio_track(&track);
+    queue.replace_queue_with_radio(&track);
     osd::notify("Starting local radio…");
     spawn_fill(queue, library, events, true);
 }
