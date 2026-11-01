@@ -60,6 +60,9 @@ try {
   assert.equal(queue.items[2]?.meta?.current, true);
   await client.call("radio.action", { action: "discovery", value: 73 });
   const radio = await client.call<{ discovery: number }>("radio.status"); assert.equal(radio.discovery, 73);
+  for (let index = 0; index < 5; index++) {
+    await client.call("queue.action", { action: "append", uri: "spotify:track:FixtureTrackBeta000002" });
+  }
   await client.call("radio.action", { action: "start" });
   const stationDeadline = Date.now() + 5000;
   let station = await client.call<{ radio_pending_count: number; parked_count: number; queue_mode: string }>("radio.status");
@@ -68,8 +71,11 @@ try {
     station = await client.call<typeof station>("radio.status");
   }
   assert.equal(station.queue_mode, "station");
-  assert.ok(station.parked_count >= 2, "previous playlist context was not retained");
-  assert.equal(station.radio_pending_count, 1, "cached related track was blocked by parked context");
+  assert.equal(station.parked_count, 0, "starting radio must clear the previous playlist context");
+  assert.equal(station.radio_pending_count, 1, "cached related track was not queued");
+  queue = await client.call<Page>("queue.list");
+  assert.equal(queue.items.length, 2, "starting radio must retain only the playing track and new recommendations");
+  assert.equal(queue.items[0]?.meta?.current, true);
   await client.call("queue.action", { action: "append", uri: "spotify:track:FixtureTrackAlpha00001" });
   const statusDeadline = Date.now() + 5000;
   while (!lastStatus?.prototype?.up_next_origins?.includes("explicit") && Date.now() < statusDeadline) await delay(20);
